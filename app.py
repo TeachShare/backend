@@ -1,10 +1,11 @@
 from flask import Flask
 from controller.v1 import v1_bp
 from dotenv import load_dotenv
-from models import db
+from models import db, Teacher, UserAuth
 import os
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+from flask_migrate import Migrate
 
 load_dotenv()
 
@@ -13,6 +14,8 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
+
+migrate = Migrate(app, db)
 
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
