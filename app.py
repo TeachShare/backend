@@ -1,7 +1,7 @@
 from flask import Flask
 from controller.v1 import v1_bp
 from dotenv import load_dotenv
-from models import db, Teacher, UserAuth
+from models import db, Teacher, UserAuth, ContentType, GradeLevel, ResourceCollection, ResourceTag, Review, Subject, TagType, Tag
 import os
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager

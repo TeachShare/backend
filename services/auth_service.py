@@ -36,9 +36,11 @@ class AuthService:
             db.session.commit()
             return {"success": True, "message": "Registration complete!"}
         
-        except IntegrityError:
+        except IntegrityError as e:
             db.session.rollback()
-            return {"success": False, "message": "Database conflict: Email already exists."}
+            # This prints the REAL error (like "joined_date cannot be null") to your console
+            print(f"DATABASE ERROR: {e.orig}") 
+            return {"success": False, "message": "A database integrity error occurred."}
         except Exception as e:
             return {"success": False, "message": "An unexpected error occured."}
         

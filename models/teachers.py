@@ -1,5 +1,5 @@
 from . import db
-from datetime import datetime
+from sqlalchemy.sql import func
 
 class Teacher(db.Model):
     __tablename__ = 'teachers'
@@ -9,7 +9,7 @@ class Teacher(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False)
 
     profile_image_url = db.Column(db.String(255), nullable=True)
-    joined_date = db.Column(db.DateTime, default=datetime.utcnow) 
+    joined_date = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     auth = db.relationship('UserAuth', backref='teacher', uselist=False, cascade="all, delete-orphan")
 
@@ -17,6 +17,6 @@ class Teacher(db.Model):
 class UserAuth(db.Model):
     __tablename__ = 'user_auth'
     auth_id = db.Column(db.Integer, primary_key=True)
-    teacher_id = db.Column(db.Integer, db.ForeignKey('teachers.teacher_id'), unique=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('teachers.teacher_id'), unique=True, nullable=False)
     hashed_password = db.Column(db.Text, nullable=False)
     is_active = db.Column(db.Boolean, default=True)
