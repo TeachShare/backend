@@ -21,6 +21,8 @@ app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
 app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production (HTTPS)
+
+app.config["JWT_COOKIE_SAMESITE"] = "Lax"
 app.config["JWT_COOKIE_CSRF_PROTECT"] = True  # Modern security requirement
 app.config["JWT_ACCESS_CSRF_HEADER_NAME"] = "X-CSRF-TOKEN"
 

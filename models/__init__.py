@@ -11,3 +11,5 @@ from .review import Review
 from .subject import Subject
 from .tag_type import TagType
 from .tag import Tag
+from .resource_file import ResourceFile
+from .resource_version import ResourceVersion
