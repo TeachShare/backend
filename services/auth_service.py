@@ -54,17 +54,20 @@ class AuthService:
         if not found_teacher:
             return {"success": False, "message": "Email not found!"}
         
-      
-        if found_teacher.auth and check_password_hash(found_teacher.auth.hashed_password, password):
-            access_token = create_access_token(identity=str(found_teacher.teacher_id))
 
-            payload= {
-                "success": True,
-                "message": f"Welcome , {found_teacher.first_name}!",
-                "user": {"id": found_teacher.teacher_id}
-            }
+        if found_teacher.auth and found_teacher.auth.hashed_password:
+            if check_password_hash(found_teacher.auth.hashed_password, password):
+                access_token = create_access_token(identity=str(found_teacher.teacher_id))
 
-            return payload, access_token
+                payload= {
+                    "success": True,
+                    "message": f"Welcome , {found_teacher.first_name}!",
+                    "user": {"id": found_teacher.teacher_id}
+                }
+
+                return payload, access_token
+        else:
+            return {"success": False, "message": "This account uses Google Login."}, None
         
         return {"success": False, "message": "Invalid email or password"}, None
     
@@ -72,6 +75,64 @@ class AuthService:
     def logout():
         return {"success": True, "message": "Successfully logged out!"}, None
     
+    @staticmethod
+    def login_or_register_google(user_info):
+        google_id = user_info.get('sub')
+        email = user_info.get('email')
 
+        auth_record = UserAuth.query.filter_by(google_id=google_id).first()
+        found_teacher = None
 
+        if auth_record:
+            found_teacher = auth_record.teacher
+        else:
+            found_teacher = Teacher.query.filter_by(email=email).first()
+
+            if not found_teacher:
+
+                try:
+                    found_teacher = Teacher(
+                        first_name = user_info.get('given_name', 'New'),
+                        last_name = user_info.get('family_name', 'User'),
+                        email = email,
+                        profile_image_url=user_info.get('picture'),
+                        is_verified = True
+                    )
+                    
+                    db.session.add(found_teacher)
+                    db.session.flush()
+                    
+                    auth_record = UserAuth(
+                        teacher_id = found_teacher.teacher_id,
+                        google_id = google_id,
+                        auth_provider = 'google',
+                        hashed_password = None
+                    )
+                    
+                    db.session.add(auth_record)
+                    db.session.commit()
+                
+                except Exception as e:
+                    db.session.rollback()
+                    return { "success": False, "message": "Failed to create Google Account."}, None
+                
+            else:
+                auth_record = found_teacher.auth
+                auth_record.google_id = google_id
+                auth_record.auth_provider = 'google'
+
+                db.session.commit()
         
+        if not found_teacher:
+            return {"success": False, "message": "User not found"}, None
+
+        access_token = create_access_token(identity=str(found_teacher.teacher_id))
+
+        payload = {
+            "success": True,
+            "message": f"Welcome back, {found_teacher.first_name}",
+            "user": {"id": found_teacher.teacher_id}
+        }
+
+
+        return payload, access_token

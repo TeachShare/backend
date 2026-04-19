@@ -1,7 +1,8 @@
-from flask import Blueprint, request, jsonify, make_response
+from flask import Blueprint, request, jsonify, make_response, current_app, url_for, redirect
 from flask_jwt_extended import set_access_cookies, unset_jwt_cookies, jwt_required, get_jwt_identity
 from services.auth_service import AuthService
 from models import Teacher
+from extensions import oauth
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -74,3 +75,23 @@ def get_current_user():
         }   
 
     return jsonify(response_data), 200
+
+
+@auth_bp.route('/login/google')
+def google_login():
+
+    redirect_uri = url_for('v1.auth.google_callback', _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+@auth_bp.route('/callback/google')
+def google_callback():
+    token = oauth.google.authorize_access_token()
+    user_info = token.get('userinfo')
+
+    result, jwt_token = AuthService.login_or_register_google(user_info)
+
+    
+    res = redirect("http://localhost:3000/dashboard")
+    set_access_cookies(res, jwt_token)
+
+    return res
