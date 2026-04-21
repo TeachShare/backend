@@ -6,6 +6,7 @@ from models import db
 import os
 from flask_cors import CORS
 from flask_migrate import Migrate
+from flask_mailman import Mail
 
 load_dotenv()
 
@@ -15,6 +16,14 @@ app = Flask(__name__)
 app.config['GOOGLE_CLIENT_ID'] = os.getenv("GOOGLE_CLIENT_ID")
 app.config['GOOGLE_CLIENT_SECRET'] = os.getenv("GOOGLE_CLIENT_SECRET")
 app.secret_key = os.getenv("APP_SECRET_KEY", "dev-mode-fallback-only")
+
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.getenv("GOOGLE_EMAIL")
+app.config['MAIL_PASSWORD'] = os.getenv("GOOGLE_EMAIL_PASSWORD") 
+
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv("GOOGLE_EMAIL")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 
@@ -33,6 +42,7 @@ db.init_app(app)
 jwt.init_app(app)
 oauth.init_app(app)
 migrate = Migrate(app, db)
+mail = Mail(app)
 
 # REGISTER GOOGLE
 google = oauth.register(

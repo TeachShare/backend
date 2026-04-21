@@ -5,14 +5,16 @@ from services.resource_collection_service import ResourceCollectionService
 from services.file_service import AppwriteService
 from models import ResourceCollection
 
+from lib import verification_required
+
 resource_collection_bp = Blueprint('resource_collection', __name__)
 appwrite_service = AppwriteService()
 
 @resource_collection_bp.route('/create_resources', methods=['POST'])
-@jwt_required()
-def create_resource_route():
+@verification_required
+def create_resource_route(current_teacher):
     try:
-        current_teacher_id = get_jwt_identity()
+        current_teacher_id = current_teacher.teacher_id
 
         data_string = request.form.get('resource_data')
         if not data_string:
@@ -52,10 +54,10 @@ def create_resource_route():
     
 
 @resource_collection_bp.route('/my_resources', methods=['GET'])
-@jwt_required()
-def get_my_resources():
+@verification_required
+def get_my_resources(current_teacher):
     try:
-        curr_teacher_id = int(get_jwt_identity())
+        curr_teacher_id = current_teacher.teacher_id
 
         resources = ResourceCollectionService.get_my_resources(curr_teacher_id)
 
@@ -70,8 +72,8 @@ def get_my_resources():
     
 
 @resource_collection_bp.route('/<int:collection_id>', methods=['GET'])
-@jwt_required()
-def get_resource_detail_route(collection_id):
+@verification_required
+def get_resource_detail_route(current_teacher,collection_id):
     try:
         resource = ResourceCollectionService.get_resource_by_id(collection_id)
         
@@ -89,10 +91,10 @@ def get_resource_detail_route(collection_id):
     
 
 @resource_collection_bp.route('/<int:collection_id>', methods=['PUT'])
-@jwt_required()
-def update_resource_route(collection_id):
+@verification_required
+def update_resource_route(current_teacher, collection_id):
     try:
-        current_teacher_id = int(get_jwt_identity()) 
+        current_teacher_id = current_teacher.teacher_id
 
         original_resource = ResourceCollection.query.get(collection_id)
         
@@ -137,8 +139,8 @@ def update_resource_route(collection_id):
         return jsonify({"success": False, "error": str(e)}), 500
     
 @resource_collection_bp.route('/<int:collection_id>/history', methods=['GET'])
-@jwt_required()
-def get_resource_history_route(collection_id):
+@verification_required
+def get_resource_history_route(current_teacher, collection_id):
     """
     Fetches the lineage of versions (all spawned collections) 
     associated with this specific resource.
@@ -162,8 +164,8 @@ def get_resource_history_route(collection_id):
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
 @resource_collection_bp.route('/compare/<int:v1_id>/<int:v2_id>', methods=['GET'])
-@jwt_required()
-def get_comparison_data(v1_id, v2_id):
+@verification_required
+def get_comparison_data(current_teacher, v1_id, v2_id):
     try:
         # Fetch any two snapshots from your immutable collection
         version_a = ResourceCollectionService.get_resource_by_id(v1_id)
@@ -181,17 +183,17 @@ def get_comparison_data(v1_id, v2_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 @resource_collection_bp.route('/discover', methods=['GET'])
-@jwt_required()
-def discover_resources_route():
-    current_teacher_id = int(get_jwt_identity())
+@verification_required
+def discover_resources_route(current_teacher):
+    current_teacher_id = current_teacher.teacher_id
     resources = ResourceCollectionService.get_discover_resources(current_teacher_id)
     return jsonify({"success": True, "data": resources}), 200
 
 
 @resource_collection_bp.route('/remix/<int:collection_id>', methods=['POST'])
-@jwt_required()
-def remix_resource_route(collection_id):
-    current_teacher_id = int(get_jwt_identity())
+@verification_required
+def remix_resource_route(current_teacher, collection_id):
+    current_teacher_id = current_teacher.teacher_id
     try:
         new_resource = ResourceCollectionService.remix_resource(collection_id, current_teacher_id)
         return jsonify({
@@ -204,9 +206,9 @@ def remix_resource_route(collection_id):
 
 
 @resource_collection_bp.route('/<int:collection_id>', methods=['DELETE'])
-@jwt_required()
-def delete_resource_permanently_route(collection_id):
-    current_teacher_id = int(get_jwt_identity())
+@verification_required
+def delete_resource_permanently_route(current_teacher, collection_id):
+    current_teacher_id = current_teacher.teacher_id
     try:
         ResourceCollectionService.delete_resource_permanently(collection_id, current_teacher_id)
         return jsonify({

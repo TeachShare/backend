@@ -1,7 +1,9 @@
-from models import Teacher, UserAuth, db
+from models import Teacher, UserAuth, db, VerificationCodes
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy.exc import IntegrityError
 from flask_jwt_extended import create_access_token, set_access_cookies
+from datetime import datetime
+from lib import send_verification_code
 
 class AuthService:
     @staticmethod
@@ -32,9 +34,20 @@ class AuthService:
                 hashed_password=generate_password_hash(password)
             )
             db.session.add(new_auth)
-
             db.session.commit()
-            return {"success": True, "message": "Registration complete!"}
+
+            send_verification_code(new_teacher)
+
+            verif_entry = VerificationCodes.query.filter_by(user_id=new_teacher.teacher_id).order_by(VerificationCodes.created_at.desc()).first()
+
+            
+            return {
+                "success": True, 
+                "message": "Registration complete! Please verify your email.",
+                "id": new_teacher.teacher_id,
+                "verification_hash": verif_entry.code_hash if verif_entry else None,
+                "is_verified": False 
+            }
         
         except IntegrityError as e:
             db.session.rollback()
@@ -42,7 +55,8 @@ class AuthService:
             print(f"DATABASE ERROR: {e.orig}") 
             return {"success": False, "message": "A database integrity error occurred."}
         except Exception as e:
-            return {"success": False, "message": "An unexpected error occured."}
+            print(f"DEBUG REGISTER ERROR: {e}")
+            return {"success": False, "message": f"An unexpected error occured: {e}"}
         
 
     @staticmethod
@@ -59,10 +73,14 @@ class AuthService:
             if check_password_hash(found_teacher.auth.hashed_password, password):
                 access_token = create_access_token(identity=str(found_teacher.teacher_id))
 
+                verif_entry = VerificationCodes.query.filter_by(user_id=found_teacher.teacher_id).order_by(VerificationCodes.created_at.desc()).first()
+
                 payload= {
                     "success": True,
                     "message": f"Welcome , {found_teacher.first_name}!",
-                    "user": {"id": found_teacher.teacher_id}
+                    "user": {"id": found_teacher.teacher_id},
+                    "is_verified": found_teacher.is_verified,
+                    "verification_hash": verif_entry.code_hash if verif_entry else None
                 }
 
                 return payload, access_token
@@ -136,3 +154,58 @@ class AuthService:
 
 
         return payload, access_token
+    
+
+    @staticmethod
+    def verification_code(teacher_id, user_input_code):
+
+        t_id = int(teacher_id)
+        record = VerificationCodes.query.filter_by(user_id=t_id).order_by(VerificationCodes.created_at.desc()).first()
+
+        if not record:
+            return { "error": "No code found", "status": 404 }
+        
+        if datetime.utcnow() > record.expires_at:
+            db.session.delete(record)
+            db.session.commit()
+            return {"error": "Code expired", "status": 404 }
+        
+        if not check_password_hash(record.code_hash, user_input_code):
+            return {"error": "Invalid code", "status": 400}
+        
+        teacher = Teacher.query.get(teacher_id)
+        if teacher:
+            teacher.is_verified = True
+            db.session.delete(record)
+            db.session.commit()
+            return {"message": "Verified successfully", "status": 200}
+        
+        return {"error": "Teacher not found", "status": 404}
+    
+    @staticmethod
+    def resend_code(teacher_id):
+        teacher = Teacher.query.get(teacher_id)
+        if not teacher:
+            return {"success": False, "message": "Teacher not found."}, 404
+        
+        if teacher.is_verified:
+            return {"success": False, "message": "Account already verified"}, 400
+        
+        try:
+            VerificationCodes.query.filter_by(user_id=teacher.teacher_id).delete()
+
+            send_verification_code(teacher)
+
+            verif_entry = VerificationCodes.query.filter_by(user_id=teacher.teacher_id)\
+                          .order_by(VerificationCodes.created_at.desc()).first()
+            
+            return {
+                "success": True, 
+                "message": "A new code has been sent!",
+                "verification_hash": verif_entry.code_hash if verif_entry else None
+            }, 200
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"RESEND ERROR: {e}")
+            return {"success": False, "message": "Failed to resend code."}, 500

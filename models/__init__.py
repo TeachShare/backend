@@ -13,3 +13,4 @@ from .tag_type import TagType
 from .tag import Tag
 from .resource_file import ResourceFile
 from .resource_version import ResourceVersion
+from .verification_codes import VerificationCodes
