@@ -3,9 +3,11 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from services.resource_collection_service import ResourceCollectionService
 from services.file_service import AppwriteService
-from models import ResourceCollection
+from services.interaction_service import InteractionService
+from models import ResourceCollection,db
 
 from lib import verification_required
+import traceback
 
 resource_collection_bp = Blueprint('resource_collection', __name__)
 appwrite_service = AppwriteService()
@@ -53,29 +55,40 @@ def create_resource_route(current_teacher):
         return jsonify({"success": False, "error": "Internal server error"}), 500
     
 
-@resource_collection_bp.route('/my_resources', methods=['GET'])
+@resource_collection_bp.route('/my-resources', methods=['GET'])
 @verification_required
 def get_my_resources(current_teacher):
     try:
-        curr_teacher_id = current_teacher.teacher_id
 
-        resources = ResourceCollectionService.get_my_resources(curr_teacher_id)
+        filters = {
+            "search": request.args.get('search'),
+            "subject_id": request.args.get('subject_id', type=int),
+            "grade_level_id": request.args.get('grade_level_id', type=int),
+            "content_type_id": request.args.get('content_type_id', type=int),
+            "status": request.args.get('status')
+        }
+
+        resources = ResourceCollectionService.get_my_resources(
+            current_teacher.teacher_id,
+            filters
+        )
 
         return jsonify({
             "success": True,
-            "data": resources
+            "data": resources,
+            "count": len(resources)
         }), 200
     
     except Exception as e:
-        print(f"Error fetching my resources: {e}")
-        return jsonify({"success": False, "error": "Internal server error"}), 500
+        traceback.print_exc() 
+        return jsonify({"success": False, "error": str(e)}), 500
     
 
 @resource_collection_bp.route('/<int:collection_id>', methods=['GET'])
 @verification_required
 def get_resource_detail_route(current_teacher,collection_id):
     try:
-        resource = ResourceCollectionService.get_resource_by_id(collection_id)
+        resource = ResourceCollectionService.get_resource_by_id(collection_id, current_user_id=current_teacher.teacher_id)
         
         if not resource:
             return jsonify({"success": False, "error": "Resource not found"}), 404
@@ -88,6 +101,7 @@ def get_resource_detail_route(current_teacher,collection_id):
     except Exception as e:
         print(f"Error fetching resource {collection_id}: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
+    
     
 
 @resource_collection_bp.route('/<int:collection_id>', methods=['PUT'])
@@ -217,3 +231,83 @@ def delete_resource_permanently_route(current_teacher, collection_id):
         }), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
+    
+
+@resource_collection_bp.route('/<int:collection_id>/restore/<int:version_id>', methods=['POST'])
+@verification_required
+def restore_resource_version_route(current_teacher, collection_id, version_id):
+    try:
+        current_teacher_id = current_teacher.teacher_id
+
+        resource = ResourceCollection.query.get(collection_id)
+        if not resource:
+            return jsonify({"success": False, "error": "Resource not found"}), 404
+        
+        if resource.owner_id != current_teacher_id:
+            return jsonify({
+                "success": False, 
+                "error": "Unauthorized: You can only restore your own resources."
+            }), 403
+        
+        result = ResourceCollectionService.restore_resource(collection_id, version_id)
+
+        if "error" in result:
+            return jsonify({"success": False, "error": result["error"]}), 400
+        
+        return jsonify({
+            "success": True,
+            "message": result["message"]
+        }), 200
+    
+    except Exception as e:
+        print(f"Error restoring version {version_id} for collection {collection_id}: {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+    
+
+@resource_collection_bp.route('/<int:id>/review', methods=['POST'])
+@verification_required
+def post_review(current_teacher, id):
+    try:
+        data = request.get_json()
+        
+        result = InteractionService.add_review(
+            collection_id=id,
+            teacher_id=current_teacher.teacher_id,
+            data=data
+        )
+
+        return jsonify({
+            "success": True,
+            "data": result,
+            "message": "Review submitted successfully"
+        }), 201
+
+    except Exception as e:
+        traceback.print_exc() 
+        db.session.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    
+
+@resource_collection_bp.route('/<int:id>/like', methods=['POST'])
+@verification_required
+def toggle_resource_like(current_teacher, id):
+    try:
+        # Check if the resource actually exists first
+        resource = ResourceCollection.query.get(id)
+        if not resource:
+            return jsonify({"success": False, "error": "Resource not found"}), 404
+
+        result = InteractionService.toggle_like(
+            collection_id=id,
+            teacher_id=current_teacher.teacher_id
+        )
+
+        return jsonify({
+            "success": True,
+            "liked": result["liked"],
+            "message": result["message"]
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500

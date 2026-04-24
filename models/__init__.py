@@ -14,3 +14,6 @@ from .tag import Tag
 from .resource_file import ResourceFile
 from .resource_version import ResourceVersion
 from .verification_codes import VerificationCodes
+from .resource_rating import ResourceRating
+from .resource_like import ResourceLike
+from .resource_comment import ResourceComment

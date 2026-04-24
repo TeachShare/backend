@@ -1,4 +1,8 @@
-from models import ResourceCollection, ResourceVersion, ResourceFile, ResourceTag, Tag, TagType, Subject, ContentType, GradeLevel, db
+from models import ResourceCollection, ResourceVersion, ResourceFile, ResourceTag, Tag, TagType, Subject, ContentType, GradeLevel, db, ResourceComment, ResourceRating, ResourceLike
+from datetime import datetime
+from sqlalchemy.orm import joinedload
+from sqlalchemy import or_, cast, String
+from sqlalchemy.sql import func
 
 class ResourceCollectionService:
     @staticmethod
@@ -79,140 +83,239 @@ class ResourceCollectionService:
             raise e
 
     @staticmethod
-    def get_my_resources(teacher_id):
-        # This now works perfectly because create_resource sets is_latest=True
-        my_collections = db.session.query(ResourceCollection)\
-            .join(ResourceVersion, ResourceCollection.collection_id == ResourceVersion.collection_id)\
-            .filter(ResourceCollection.owner_id == teacher_id)\
-            .filter(ResourceVersion.is_latest == True)\
-            .order_by(ResourceCollection.updated_at.desc())\
-            .all()
+    def get_my_resources(teacher_id, filters=None):
+        
+        query = db.session.query(
+        ResourceCollection,
+        func.count(ResourceLike.collection_id).label('total_likes')
+      
+    )\
+        .outerjoin(ResourceLike, ResourceCollection.collection_id == ResourceLike.collection_id)\
+        .outerjoin(Subject, ResourceCollection.subject_id == Subject.subject_id)\
+        .outerjoin(GradeLevel, ResourceCollection.grade_level_id == GradeLevel.grade_level_id)\
+        .outerjoin(ContentType, ResourceCollection.content_type_id == ContentType.content_type_id)\
+        .join(ResourceVersion, ResourceCollection.collection_id == ResourceVersion.collection_id)\
+        .filter(ResourceCollection.owner_id == teacher_id)\
+        .filter(ResourceVersion.is_latest == True)\
+        .group_by(ResourceCollection.collection_id)
+        
+        if filters:
+            if filters.get('search'):
+                search_query = f"%{filters['search']}%"
+                query = query.filter(
+                    or_(
+                        ResourceCollection.title.ilike(search_query),
+                        cast(ResourceCollection.description, String).ilike(search_query)
+                    )
+                )
 
+            if filters.get('subject_id'):
+                query = query.filter(ResourceCollection.subject_id == filters['subject_id'])
+            if filters.get('grade_level_id'):
+                query = query.filter(ResourceCollection.grade_level_id == filters['grade_level_id'])
+            if filters.get('content_type_id'):
+                query = query.filter(ResourceCollection.content_type_id == filters['content_type_id'])
+
+            status = filters.get('status')
+            if status == 'published':
+                query = query.filter(ResourceCollection.is_published == True)
+            elif status == 'draft':
+                query = query.filter(ResourceCollection.is_published == False)
+                
+        query = query.order_by(ResourceCollection.updated_at.desc())
+
+        my_collections = query.order_by(ResourceCollection.updated_at.desc()).all()
         results = []
-        for collection in my_collections:
-            # Metadata mapping
-            subject = Subject.query.get(collection.subject_id)
-            c_type = ContentType.query.get(collection.content_type_id)
-            grade = GradeLevel.query.get(collection.grade_level_id)
 
-            resource_tags = ResourceTag.query.filter_by(collection_id=collection.collection_id).all()
-            tag_names = [Tag.query.get(rt.tag_id).tag_name for rt in resource_tags if Tag.query.get(rt.tag_id)]
-
-            # Get version number for the UI badge
-            v_info = ResourceVersion.query.filter_by(collection_id=collection.collection_id).first()
-
+        for col, total_likes in my_collections:
+            # Safer tag fetching to prevent loop crashes
+            tag_names = [rt.tag.tag_name for rt in col.tags if rt.tag] if hasattr(col, 'tags') else []
+            
             results.append({
-                "collection_id": collection.collection_id,
-                "title": collection.title,
-                "version_no": v_info.version_no if v_info else 1,
-                "is_published": collection.is_published,
-                "description": collection.description,
-                "category": subject.subject_name if subject else "No Subject",
-                "type": c_type.type_name if c_type else "No Type",
-                "grade": grade.grade_name if grade else "No Grade",
-                "tags": tag_names, 
-                "created_at": collection.created_at.isoformat(),
-                "updated_at": collection.updated_at.isoformat()
-            })
+            "collection_id": col.collection_id,
+            "title": col.title or "Untitled",
+            "description": col.description if isinstance(col.description, str) else str(col.description or ""),
+            "is_published": col.is_published,
+            "category": col.subject.subject_name if col.subject else "No Subject",
+            "type": col.content_type.type_name if col.content_type else "No Type",
+            "grade": col.grade_level.grade_name if col.grade_level else "No Grade",
+            "tags": tag_names, 
+            "likes": total_likes,  
+            "downloads": 0,      
+            "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.utcnow().isoformat()
+        })
+        
         return results
-
     @staticmethod
-    def get_resource_by_id(collection_id):
+    def get_resource_by_id(collection_id, current_user_id=None):
         collection = ResourceCollection.query.get(collection_id)
         if not collection: return None
 
-        latest_version = ResourceVersion.query.filter_by(collection_id=collection_id).first()
+        latest_version = ResourceVersion.query.filter_by(collection_id=collection_id, is_latest=True).first()
+        if not latest_version:
+            latest_version = ResourceVersion.query.filter_by(collection_id=collection_id)\
+                .order_by(ResourceVersion.version_no.desc()).first()
+
         files_data = []
         if latest_version:
             files = ResourceFile.query.filter_by(version_id=latest_version.version_id).all()
-            files_data = [{"file_id": f.file_id, "name": f.file_name, "url": f.file_url, "type": f.file_type, "size": f.file_size} for f in files]
+            files_data = [{
+                "file_id": f.file_id, 
+                "name": f.file_name, 
+                "url": f.file_url, 
+                "type": f.file_type, 
+                "size": f.file_size
+            } for f in files]
 
-        # Metadata & Tags
-        resource_tags = ResourceTag.query.filter_by(collection_id=collection_id).all()
-        tag_names = [Tag.query.get(rt.tag_id).tag_name for rt in resource_tags if Tag.query.get(rt.tag_id)]
+        tag_names = [t.tag_name for t in db.session.query(Tag.tag_name)\
+                    .join(ResourceTag, Tag.tag_id == ResourceTag.tag_id)\
+                    .filter(ResourceTag.collection_id == collection_id).all()]
+
+        comments_query = db.session.query(ResourceComment, ResourceRating.score)\
+            .outerjoin(ResourceRating, (ResourceRating.teacher_id == ResourceComment.teacher_id) & 
+                                    (ResourceRating.collection_id == ResourceComment.collection_id))\
+            .filter(ResourceComment.collection_id == collection_id)\
+            .order_by(ResourceComment.created_at.desc()).all()
+        
+        user_has_liked = False
+
+        if current_user_id:
+            user_has_liked = ResourceLike.query.filter_by(
+            collection_id=collection_id, 
+            teacher_id=current_user_id
+        ).first() is not None
+            
+        formatted_comments = [{
+            "id": c.comment_id,
+            "user": f"{c.teacher.first_name} {c.teacher.last_name}",
+            "avatar": c.teacher.first_name[0],
+            "rating": score if score else 0,
+            "text": c.content,
+            "date": c.created_at.strftime("%b %d, %Y")
+        } for c, score in comments_query] if comments_query else []
+
+        raw_avg = db.session.query(func.avg(ResourceRating.score))\
+            .filter(ResourceRating.collection_id == collection_id).scalar()
+        avg_rating = round(float(raw_avg), 1) if raw_avg is not None else 0.0
+        
+        likes_count = ResourceLike.query.filter_by(collection_id=collection_id).count()
+
+        downloads_count = getattr(collection, 'downloads_count', 0) or 0
+        remixes_count = getattr(collection, 'remixes_count', 0) or 0
 
         return {
             "collection_id": collection.collection_id,
             "owner_id": collection.owner_id,
+            "owner_name": f"{collection.owner.first_name} {collection.owner.last_name}" if collection.owner else "Unknown",
             "title": collection.title,
             "description": collection.description,
-            "subject": Subject.query.get(collection.subject_id).subject_name if collection.subject_id else "General",
-            "grade": GradeLevel.query.get(collection.grade_level_id).grade_name if collection.grade_level_id else "All Grades",
-            "type": ContentType.query.get(collection.content_type_id).type_name if collection.content_type_id else "Resource",
+            "subject": collection.subject.subject_name if collection.subject else "General",
+            "grade": collection.grade_level.grade_name if collection.grade_level else "All Grades",
+            "type": collection.content_type.type_name if collection.content_type else "Resource",
             "subject_id": collection.subject_id,
             "grade_level_id": collection.grade_level_id,
             "content_type_id": collection.content_type_id,
             "tags": tag_names,
             "files": files_data,
+            "comments": formatted_comments,
+            "avg_rating": avg_rating,
+            "likes": likes_count,
+            "user_has_liked": user_has_liked,
+            "downloads": downloads_count,
+            "remixes": remixes_count,
             "is_published": collection.is_published,
             "version_no": latest_version.version_no if latest_version else 1,
             "updated_at": collection.updated_at.isoformat()
         }
+    
+    @staticmethod
+    def restore_resource(collection_id, target_version_id):
+        target_version = ResourceVersion.query.filter_by(
+            version_id=target_version_id, 
+            collection_id=collection_id
+        ).first()
+
+        if not target_version:
+            return {"error": "Version not found for this collection"}, 404
+        
+        collection = ResourceCollection.query.get(collection_id)
+
+        ResourceVersion.query.filter_by(collection_id=collection_id).update({"is_latest": False})
+        target_version.is_latest = True
+
+        collection.updated_at = datetime.utcnow()
+
+        db.session.commit()
+        return {"message": f"Successfully restored to version {target_version.version_no}"}
 
     @staticmethod
     def update_resource(old_collection_id, data, new_files_info=None):
-        old_collection = ResourceCollection.query.get(old_collection_id)
-        if not old_collection: return None
+        collection = ResourceCollection.query.get(old_collection_id)
 
-        try:
-            # 1. Spawn New Collection (Immutability)
-            new_collection = ResourceCollection(
-                title=data.get('title', old_collection.title),
-                description=data.get('description', old_collection.description),
-                owner_id=old_collection.owner_id,
-                subject_id=data.get('subject_id', old_collection.subject_id),
-                grade_level_id=data.get('grade_level_id', old_collection.grade_level_id),
-                content_type_id=data.get('content_type_id', old_collection.content_type_id),
-                is_published=data.get('is_published', old_collection.is_published)
-            )
-            db.session.add(new_collection)
-            db.session.flush()
+        if not collection:
+            raise ValueError("Collection not found")
 
-            # 2. Update lineage: Old versions are no longer "latest"
-            # Note: In a deep tree, you'd find all siblings. Here we follow the teacher/title chain.
-            ResourceVersion.query.filter(
-                ResourceVersion.collection_id == old_collection_id
-            ).update({"is_latest": False})
+        collection.title = data.get('title', collection.title)
+        collection.description = data.get('description', collection.description)
+        collection.subject_id = data.get('subject_id', collection.subject_id)
+        collection.grade_level_id = data.get('grade_level_id', collection.grade_level_id)
+        collection.updated_at = datetime.utcnow()
 
-            # 3. Calculate new version number
-            last_v = ResourceVersion.query.filter_by(collection_id=old_collection_id).first()
-            new_v_no = (last_v.version_no + 1) if last_v else 2
+        last_v = ResourceVersion.query.filter_by(collection_id=old_collection_id)\
+            .order_by(ResourceVersion.version_no.desc()).first()
+        
+        new_v_no = (last_v.version_no + 1) if last_v else 1
 
-            new_version = ResourceVersion(
-                collection_id=new_collection.collection_id,
-                version_no=new_v_no,
-                notes=data.get('version_notes', f"Revised version {new_v_no}"),
-                is_latest=True,
-                created_by=new_collection.owner_id
-            )
-            db.session.add(new_version)
-            db.session.flush()
+        ResourceVersion.query.filter_by(collection_id=old_collection_id).update({"is_latest": False})
 
-            # 4. Handle Files
-            if new_files_info:
-                for f in new_files_info:
-                    db.session.add(ResourceFile(version_id=new_version.version_id, file_url=f.get('url'), file_name=f.get('name'), file_type=f.get('type'), file_size=f.get('size')))
-            elif last_v:
-                old_files = ResourceFile.query.filter_by(version_id=last_v.version_id).all()
-                for old_f in old_files:
-                    db.session.add(ResourceFile(version_id=new_version.version_id, file_url=old_f.file_url, file_name=old_f.file_name, file_type=old_f.file_type, file_size=old_f.file_size))
+        new_version = ResourceVersion(
+            collection_id = old_collection_id,
+            version_no = new_v_no,
+            notes = data.get('notes', 'updated resources'),
+            is_latest = True,
+            is_remix = False,
+            parent_version_id = last_v.version_id if last_v else None,
+            created_by = collection.owner_id
+        )
+        
+        db.session.add(new_version)
+        db.session.flush()
 
-            # 5. Clone Tags
-            for tag_string in data.get('tags', []):
+        if new_files_info:
+            for f in new_files_info:
+                db.session.add(ResourceFile(
+                    version_id=new_version.version_id,
+                    file_url=f.get('url'),
+                    file_name=f.get('name'),
+                    file_type=f.get('type'),
+                    file_size=f.get('size')
+                ))
+        elif last_v:
+            old_files = ResourceFile.query.filter_by(version_id=last_v.version_id).all()
+            for old_f in old_files:
+                db.session.add(ResourceFile(
+                    version_id=new_version.version_id,
+                    file_url=old_f.file_url,
+                    file_name=old_f.file_name,
+                    file_type=old_f.file_type,
+                    file_size=old_f.file_size
+                ))
+        ResourceTag.query.filter_by(collection_id=old_collection_id).delete()
+
+        for tag_string in data.get('tags', []):
                 clean_name = str(tag_string).strip().lower()
                 if not clean_name: continue
+                
                 existing_tag = Tag.query.filter_by(tag_name=clean_name).first()
                 if not existing_tag:
-                    existing_tag = Tag(tag_name=clean_name, tag_type_id=(TagType.query.filter_by(type_name='custom').first().tag_type_id))
+                    custom_type = TagType.query.filter_by(type_name='custom').first()
+                    existing_tag = Tag(tag_name=clean_name, tag_type_id=custom_type.tag_type_id)
                     db.session.add(existing_tag)
-                    db.session.flush()
-                db.session.add(ResourceTag(collection_id=new_collection.collection_id, tag_id=existing_tag.tag_id))
+                    db.session.flush()           
+                db.session.add(ResourceTag(collection_id=old_collection_id, tag_id=existing_tag.tag_id))
 
-            db.session.commit()
-            return new_collection
-        except Exception as e:
-            db.session.rollback()
-            raise e
+        db.session.commit()
+        return collection
 
     @staticmethod
     def get_version_history(collection_id):
@@ -241,41 +344,51 @@ class ResourceCollectionService:
             })
         return history
 
+
     @staticmethod
     def get_discover_resources(current_teacher_id):
-        try:
-            query = db.session.query(ResourceCollection)\
-                .join(ResourceVersion, ResourceCollection.collection_id == ResourceVersion.collection_id)\
-                .filter(ResourceCollection.owner_id != current_teacher_id)\
-                .filter(ResourceCollection.is_published == True)\
-                .filter(ResourceVersion.is_latest == True)\
-                .order_by(ResourceCollection.updated_at.desc())
-
-            results = []
-            for collection in query.all():
-                latest_v = ResourceVersion.query.filter_by(collection_id=collection.collection_id).first()
-                file_count = ResourceFile.query.filter_by(version_id=latest_v.version_id).count() if latest_v else 0
-                resource_tags = ResourceTag.query.filter_by(collection_id=collection.collection_id).all()
-
-                results.append({
-                    "collection_id": collection.collection_id,
-                    "title": collection.title,
-                    "description": collection.description,
-                    "owner_name": f"{collection.owner.first_name} {collection.owner.last_name}",
-                    "subject": Subject.query.get(collection.subject_id).subject_name if collection.subject_id else "General",
-                    "grade": GradeLevel.query.get(collection.grade_level_id).grade_name if collection.grade_level_id else "All Grades",
-                    "type": ContentType.query.get(collection.content_type_id).type_name if collection.content_type_id else "Resource",
-                    "tags": [Tag.query.get(rt.tag_id).tag_name for rt in resource_tags if Tag.query.get(rt.tag_id)],
-                    "file_count": file_count,
-                    "version_no": latest_v.version_no if latest_v else 1,
-                    "updated_at": collection.updated_at.isoformat()
-                })
-            return results
-        except Exception as e:
-            raise e
+        # Main query for the collections
+        query = db.session.query(ResourceCollection)\
+            .options(joinedload(ResourceCollection.subject),
+                    joinedload(ResourceCollection.grade_level),
+                    joinedload(ResourceCollection.content_type))\
+            .filter(ResourceCollection.owner_id != current_teacher_id)\
+            .filter(ResourceCollection.is_published == True)\
+            .order_by(ResourceCollection.updated_at.desc())
         
+        results = []
+        
+        for collection in query.all():
+            # Manual fetch for the latest version since 'versions' relationship isn't set
+            latest_v = ResourceVersion.query.filter_by(
+                collection_id=collection.collection_id, 
+                is_latest=True
+            ).first()
+
+            # Fetch tags manually
+            tag_names = [t.tag_name for t in db.session.query(Tag.tag_name)\
+                        .join(ResourceTag, Tag.tag_id == ResourceTag.tag_id)\
+                        .filter(ResourceTag.collection_id == collection.collection_id).all()]
+
+            file_count = ResourceFile.query.filter_by(version_id=latest_v.version_id).count() if latest_v else 0
+
+            results.append({
+                "collection_id": collection.collection_id,
+                "title": collection.title,
+                "owner_name": f"{collection.owner.first_name} {collection.owner.last_name}" if collection.owner else "Unknown",
+                "subject": collection.subject.subject_name if collection.subject else "General",
+                "grade": collection.grade_level.grade_name if collection.grade_level else "All Grades",
+                "type": collection.content_type.type_name if collection.content_type else "Resource",
+                "tags": tag_names, # Now defined correctly
+                "file_count": file_count,
+                "version_no": latest_v.version_no if latest_v else 1,
+                "updated_at": collection.updated_at.isoformat()
+            })
+
+        return results
+    
     @staticmethod
-    def remix_resource(original_collection_id, new_owner_id):
+    def remix_resource(original_collection_id, new_owner_id ):
         """
         Clones a resource into a new owner's collection.
         Sets is_remix=True and links to the parent_version_id for citation.
