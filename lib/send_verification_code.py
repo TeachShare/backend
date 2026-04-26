@@ -34,11 +34,10 @@ def send_verification_code(teacher):
 
     msg = EmailMessage(
         subject="Your TeachShare Verification Code",
-        body=html_body, # Pass the HTML string here
+        body=html_body, 
         to=[teacher.email]
     )
     
-    # CRITICAL: Tell mailman to render this as HTML
     msg.content_subtype = "html"
     
     msg.send()

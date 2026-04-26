@@ -1,5 +1,5 @@
 from models import ResourceCollection, ResourceVersion, ResourceFile, ResourceTag, Tag, TagType, Subject, ContentType, GradeLevel, db, ResourceComment, ResourceRating, ResourceLike
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_, cast, String
 from sqlalchemy.sql import func
@@ -26,7 +26,8 @@ class ResourceCollectionService:
                 owner_id = data.get('owner_id'),
                 subject_id = data.get('subject_id'),
                 grade_level_id = data.get('grade_level_id'),
-                content_type_id = data.get('content_type_id')
+                content_type_id = data.get('content_type_id'),
+                updated_at = datetime.now(timezone.utc)
             )
 
             db.session.add(new_collection)
@@ -142,7 +143,7 @@ class ResourceCollectionService:
             "tags": tag_names, 
             "likes": total_likes,  
             "downloads": 0,      
-            "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.utcnow().isoformat()
+            "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat()
         })
         
         return results
@@ -243,7 +244,7 @@ class ResourceCollectionService:
         ResourceVersion.query.filter_by(collection_id=collection_id).update({"is_latest": False})
         target_version.is_latest = True
 
-        collection.updated_at = datetime.utcnow()
+        collection.updated_at = datetime.now(timezone.utc)
 
         db.session.commit()
         return {"message": f"Successfully restored to version {target_version.version_no}"}
@@ -254,13 +255,14 @@ class ResourceCollectionService:
 
         if not collection:
             raise ValueError("Collection not found")
-
+        collection.is_published = data.get('is_published', collection.is_published)
         collection.title = data.get('title', collection.title)
         collection.description = data.get('description', collection.description)
         collection.subject_id = data.get('subject_id', collection.subject_id)
         collection.grade_level_id = data.get('grade_level_id', collection.grade_level_id)
-        collection.updated_at = datetime.utcnow()
 
+        collection.updated_at = datetime.now(timezone.utc)
+        
         last_v = ResourceVersion.query.filter_by(collection_id=old_collection_id)\
             .order_by(ResourceVersion.version_no.desc()).first()
         
