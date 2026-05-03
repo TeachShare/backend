@@ -17,3 +17,6 @@ from .verification_codes import VerificationCodes
 from .resource_rating import ResourceRating
 from .resource_like import ResourceLike
 from .resource_comment import ResourceComment
+from .follower import Follower
+from .community import CommunityPost, PostComment, PostLike
+from .message import Message

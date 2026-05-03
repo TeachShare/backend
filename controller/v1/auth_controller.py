@@ -5,7 +5,7 @@ from models import Teacher
 from extensions import oauth
 
 auth_bp = Blueprint('auth', __name__)
-
+REDIRECT_URI = 'http://localhost:5000/api/v1/auth/callback/google'
 @auth_bp.route('/register', methods=['POST'])
 def register():
     
@@ -79,6 +79,9 @@ def get_current_user():
         "last_name": teacher.last_name,
         "email": teacher.email,
         "profile": teacher.profile_image_url,
+        "role": teacher.role,
+        "institution": teacher.institution,
+        "bio": teacher.bio,
         "is_verified": teacher.is_verified
     }
 
@@ -87,18 +90,18 @@ def get_current_user():
 
 @auth_bp.route('/login/google')
 def google_login():
-
-    redirect_uri = url_for('v1.auth.google_callback', _external=True)
-    return oauth.google.authorize_redirect(redirect_uri)
+    # Force the exact redirect URI
+    return oauth.google.authorize_redirect(REDIRECT_URI)
 
 @auth_bp.route('/callback/google')
 def google_callback():
+    # Remove the redirect_uri argument here. 
+    # Authlib automatically handles the request context.
     token = oauth.google.authorize_access_token()
     user_info = token.get('userinfo')
 
     result, jwt_token = AuthService.login_or_register_google(user_info)
 
-    
     res = redirect("http://localhost:3000/dashboard")
     set_access_cookies(res, jwt_token)
 

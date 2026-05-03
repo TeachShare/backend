@@ -11,9 +11,21 @@ class Teacher(db.Model):
     is_verified = db.Column(db.Boolean, default=False, nullable=False)
 
     profile_image_url = db.Column(db.String(255), nullable=True)
+    role = db.Column(db.String(100), nullable=True)
+    institution = db.Column(db.String(150), nullable=True)
+    bio = db.Column(db.Text, nullable=True)
     joined_date = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     auth = db.relationship('UserAuth', backref='teacher', uselist=False, cascade="all, delete-orphan")
+
+    followed = db.relationship(
+        'Teacher', 
+        secondary='followers', 
+        primaryjoin='Teacher.teacher_id == followers.c.follower_id',
+        secondaryjoin='Teacher.teacher_id == followers.c.followed_id',
+        backref=db.backref('followers', lazy='dynamic'),
+        lazy='dynamic'
+    )
 
 
 class UserAuth(db.Model):

@@ -497,3 +497,5 @@ class ResourceCollectionService:
         except Exception as e:
             db.session.rollback()
             raise e
+        
+        
