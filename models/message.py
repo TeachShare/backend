@@ -8,6 +8,9 @@ class Message(db.Model):
     sender_id = db.Column(db.Integer, db.ForeignKey('teachers.teacher_id'), nullable=False)
     receiver_id = db.Column(db.Integer, db.ForeignKey('teachers.teacher_id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    file_url = db.Column(db.String(500), nullable=True)
+    file_name = db.Column(db.String(255), nullable=True)
+    file_type = db.Column(db.String(100), nullable=True)
     is_read = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -20,6 +23,9 @@ class Message(db.Model):
             "sender_id": self.sender_id,
             "receiver_id": self.receiver_id,
             "content": self.content,
+            "file_url": self.file_url,
+            "file_name": self.file_name,
+            "file_type": self.file_type,
             "is_read": self.is_read,
             "created_at": self.created_at.isoformat()
         }

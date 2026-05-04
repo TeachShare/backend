@@ -1,16 +1,19 @@
+import eventlet
+eventlet.monkey_patch()
+
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask
 from controller.v1 import v1_bp
-from dotenv import load_dotenv
-from extensions import  jwt, oauth
+from extensions import jwt, oauth
 from models import db
-import os
 from flask_cors import CORS
 from flask_migrate import Migrate
 from flask_mailman import Mail
 from flask_socketio import SocketIO, emit, join_room
 from services.message_service import MessageService
-
-load_dotenv()
 
 app = Flask(__name__)
 
@@ -70,9 +73,19 @@ def handle_send_message(data):
     sender_id = data.get('sender_id')
     receiver_id = data.get('receiver_id')
     content = data.get('content')
+    file_url = data.get('file_url')
+    file_name = data.get('file_name')
+    file_type = data.get('file_type')
 
-    if all([sender_id, receiver_id, content]):
-        saved_msg = MessageService.save_message(sender_id, receiver_id, content)
+    if all([sender_id, receiver_id]) and (content or file_url):
+        saved_msg = MessageService.save_message(
+            sender_id, 
+            receiver_id, 
+            content or "", 
+            file_url=file_url,
+            file_name=file_name,
+            file_type=file_type
+        )
         room = f"user_{receiver_id}"
         emit('new_message', saved_msg, room=room)
         emit('message_sent', saved_msg)

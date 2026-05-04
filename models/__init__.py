@@ -20,3 +20,4 @@ from .resource_comment import ResourceComment
 from .follower import Follower
 from .community import CommunityPost, PostComment, PostLike
 from .message import Message
+from .ai_generated_content import AIGeneratedContent

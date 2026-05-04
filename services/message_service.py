@@ -24,11 +24,20 @@ class MessageService:
                 )
             ).order_by(Message.created_at.desc()).first()
 
+            def get_last_message_preview(msg):
+                if not msg:
+                    return ""
+                if msg.content:
+                    return msg.content
+                if msg.file_url:
+                    return "File attachment"
+                return ""
+
             conversations.append({
                 "id": partner.teacher_id,
                 "name": f"{partner.first_name} {partner.last_name}",
                 "avatar": partner.profile_image_url,
-                "last_message": last_msg.content if last_msg else "",
+                "last_message": get_last_message_preview(last_msg),
                 "timestamp": last_msg.created_at.isoformat() if last_msg else None,
                 "unread_count": Message.query.filter_by(sender_id=p_id, receiver_id=teacher_id, is_read=False).count()
             })
@@ -51,8 +60,15 @@ class MessageService:
         return [m.to_dict() for m in messages]
 
     @staticmethod
-    def save_message(sender_id, receiver_id, content):
-        msg = Message(sender_id=sender_id, receiver_id=receiver_id, content=content)
+    def save_message(sender_id, receiver_id, content, file_url=None, file_name=None, file_type=None):
+        msg = Message(
+            sender_id=sender_id, 
+            receiver_id=receiver_id, 
+            content=content,
+            file_url=file_url,
+            file_name=file_name,
+            file_type=file_type
+        )
         db.session.add(msg)
         db.session.commit()
         return msg.to_dict()

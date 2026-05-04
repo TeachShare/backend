@@ -42,3 +42,27 @@ class AppwriteService:
             "type": mime_type,
             "size": file_size
         }
+
+    def upload_bytes(self, file_bytes, filename, mime_type):
+        file_size = len(file_bytes)
+
+        result = self.storage.create_file(
+            bucket_id = self.bucket_id,
+            file_id = 'unique()',
+            file = InputFile.from_bytes(
+                file_bytes,
+                filename,
+                mime_type
+            )
+        )
+
+        file_id = result.id
+        project_id = os.getenv("APPWRITE_PROJECT_ID")
+        file_url = f"https://sgp.cloud.appwrite.io/v1/storage/buckets/{self.bucket_id}/files/{file_id}/view?project={project_id}"
+
+        return {
+            "url": file_url,
+            "name": filename,
+            "type": mime_type,
+            "size": file_size
+        }
