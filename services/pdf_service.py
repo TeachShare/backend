@@ -1,147 +1,174 @@
-from xhtml2pdf import pisa
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem, HRFlowable
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
-import markdown2
+import re
 
 class PDFService:
     @staticmethod
     def create_content_pdf(title, content_markdown):
-        # Convert Markdown to HTML
-        # Using 'extras' to support tables and better list handling
-        html_body = markdown2.markdown(content_markdown, extras=["tables", "fenced-code-blocks", "break-on-newline"])
+        buffer = io.BytesIO()
         
-        # Modern, professional HTML template for educators
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                @page {{
-                    size: a4;
-                    margin: 2.5cm;
-                    @frame footer {{
-                        -pdf-frame-content: footerContent;
-                        bottom: 1.5cm;
-                        margin-left: 2.5cm;
-                        margin-right: 2.5cm;
-                        height: 1cm;
-                    }}
-                }}
-                
-                body {{
-                    font-family: Helvetica, Arial, sans-serif;
-                    font-size: 11pt;
-                    line-height: 1.6;
-                    color: #2d3748;
-                }}
-                
-                .header {{
-                    text-align: center;
-                    border-bottom: 2px solid #10b981;
-                    padding-bottom: 20px;
-                    margin-bottom: 30px;
-                }}
-                
-                .brand {{
-                    color: #10b981;
-                    font-size: 9pt;
-                    font-weight: bold;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                    margin-bottom: 5px;
-                }}
-                
-                h1 {{
-                    color: #1a202c;
-                    font-size: 24pt;
-                    margin: 0;
-                    line-height: 1.2;
-                }}
-                
-                h2 {{
-                    color: #059669;
-                    font-size: 16pt;
-                    border-bottom: 1px solid #e2e8f0;
-                    padding-bottom: 5px;
-                    margin-top: 25px;
-                    margin-bottom: 15px;
-                }}
-                
-                h3 {{
-                    color: #374151;
-                    font-size: 13pt;
-                    margin-top: 20px;
-                    margin-bottom: 10px;
-                }}
-                
-                p {{
-                    margin-bottom: 12px;
-                }}
-                
-                ul, ol {{
-                    margin-bottom: 15px;
-                    padding-left: 20px;
-                }}
-                
-                li {{
-                    margin-bottom: 5px;
-                }}
-                
-                strong {{
-                    color: #111827;
-                }}
-                
-                table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-bottom: 20px;
-                }}
-                
-                th, td {{
-                    border: 1px solid #e2e8f0;
-                    padding: 10px;
-                    text-align: left;
-                }}
-                
-                th {{
-                    background-color: #f8fafc;
-                    color: #475569;
-                    font-weight: bold;
-                }}
-                
-                .footer {{
-                    text-align: center;
-                    font-size: 9pt;
-                    color: #94a3b8;
-                    padding-top: 10px;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <div class="brand">TeachShare AI Intelligence</div>
-                <h1>{title}</h1>
-            </div>
-            
-            <div class="content">
-                {html_body}
-            </div>
-            
-            <div id="footerContent" class="footer">
-                Powered by DeepSeek V3 • Created with TeachShare
-            </div>
-        </body>
-        </html>
-        """
-        
-        result = io.BytesIO()
-        pisa_status = pisa.CreatePDF(
-            io.BytesIO(html_content.encode("utf-8")),
-            dest=result
+        # Define Document Template
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=2.0*cm,
+            leftMargin=2.0*cm,
+            topMargin=2.5*cm,
+            bottomMargin=2.5*cm
         )
         
-        if pisa_status.err:
-            print(f"XHTML2PDF Error: {pisa_status.err}")
-            raise Exception("Failed to generate professional PDF")
+        # Define Styles
+        styles = getSampleStyleSheet()
+        
+        style_brand = ParagraphStyle(
+            'Brand',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=9,
+            textColor=colors.HexColor('#10b981'),
+            alignment=TA_CENTER,
+            spaceAfter=2,
+            leading=12,
+            textTransform='uppercase',
+            letterSpacing=1
+        )
+        
+        style_title = ParagraphStyle(
+            'MainTitle',
+            parent=styles['Heading1'],
+            fontName='Helvetica-Bold',
+            fontSize=22,
+            textColor=colors.HexColor('#1a202c'),
+            alignment=TA_CENTER,
+            spaceAfter=20,
+            leading=26
+        )
+        
+        style_h2 = ParagraphStyle(
+            'Heading2',
+            parent=styles['Heading2'],
+            fontName='Helvetica-Bold',
+            fontSize=15,
+            textColor=colors.HexColor('#059669'),
+            spaceBefore=12,
+            spaceAfter=6,
+            leading=18,
+            textTransform='uppercase'
+        )
+        
+        style_h3 = ParagraphStyle(
+            'Heading3',
+            parent=styles['Heading3'],
+            fontName='Helvetica-Bold',
+            fontSize=12,
+            textColor=colors.HexColor('#374151'),
+            spaceBefore=10,
+            spaceAfter=6,
+            leading=14
+        )
+        
+        style_body = ParagraphStyle(
+            'BodyText',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=10.5,
+            textColor=colors.HexColor('#2d3748'),
+            leading=15,
+            spaceAfter=8
+        )
+
+        # Parse Markdown to Flowables
+        flowables = []
+        
+        # Header (Brand + Title)
+        flowables.append(Paragraph("TeachShare AI Intelligence", style_brand))
+        flowables.append(Paragraph(title, style_title))
+        flowables.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e2e8f0'), spaceAfter=20))
+        
+        # Process Content
+        lines = content_markdown.split('\n')
+        current_list = []
+        
+        def flush_list():
+            if current_list:
+                flowables.append(ListFlowable(
+                    [ListItem(Paragraph(li, style_body), leftIndent=20, spaceBefore=2) for li in current_list],
+                    bulletType='bullet',
+                    start='•',
+                    leftIndent=20,
+                    bulletOffsetY=0
+                ))
+                current_list.clear()
+                flowables.append(Spacer(1, 0.2*cm))
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                flush_list()
+                continue
             
-        return result.getvalue()
+            # Markdown Heading 2
+            if line.startswith('## '):
+                flush_list()
+                text = line[3:].strip()
+                flowables.append(Spacer(1, 0.3*cm))
+                flowables.append(Paragraph(text, style_h2))
+                flowables.append(HRFlowable(width="30%", thickness=1.5, color=colors.HexColor('#10b981'), hAlign='LEFT', spaceAfter=10))
+                continue
+            
+            # Markdown Heading 3
+            if line.startswith('### '):
+                flush_list()
+                text = line[4:].strip()
+                flowables.append(Paragraph(text, style_h3))
+                continue
+
+            # Bullet Points
+            bullet_match = re.match(r'^[\*\-\+]\s+(.*)', line)
+            if bullet_match:
+                text = bullet_match.group(1)
+                text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+                text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
+                current_list.append(text)
+                continue
+            
+            # Numbered Lists
+            num_list_match = re.match(r'^\d+\.\s+(.*)', line)
+            if num_list_match:
+                text = num_list_match.group(1)
+                text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+                text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
+                current_list.append(text)
+                continue
+
+            # Regular Paragraph
+            flush_list()
+            text = line
+            text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+            text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
+            flowables.append(Paragraph(text, style_body))
+
+        flush_list()
+
+        # Footer Drawing
+        def add_footer(canvas, doc):
+            canvas.saveState()
+            canvas.setStrokeColor(colors.HexColor('#e2e8f0'))
+            canvas.line(2*cm, 2*cm, A4[0]-2*cm, 2*cm)
+            canvas.setFont('Helvetica', 8)
+            canvas.setFillColor(colors.HexColor('#94a3b8'))
+            footer_text = "Generated by TeachShare AI • DeepSeek V3 Engine • Page %d" % doc.page
+            canvas.drawCentredString(A4[0]/2, 1.5*cm, footer_text)
+            canvas.restoreState()
+
+        # Build PDF
+        doc.build(flowables, onFirstPage=add_footer, onLaterPages=add_footer)
+        
+        pdf_content = buffer.getvalue()
+        buffer.close()
+        return pdf_content

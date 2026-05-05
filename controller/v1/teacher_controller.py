@@ -4,7 +4,8 @@ from services.follow_service import FollowService
 from services.teacher_service import TeacherService
 from lib.guards import verification_required 
 from flask_jwt_extended import get_jwt_identity
-from models  import db
+from models  import db, Teacher
+import traceback
 
 teacher_bp = Blueprint('teacher_controller', __name__)
 
@@ -12,15 +13,27 @@ teacher_bp = Blueprint('teacher_controller', __name__)
 @verification_required
 def get_all_teachers(current_teacher):
     try:
-        teachers = Teacher.query.filter(Teacher.teacher_id != current_teacher.teacher_id).all()
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
         
-        data = []
-        for t in teachers:
-            profile = TeacherService.get_profile(t.teacher_id, current_user_id=current_teacher.teacher_id)
-            data.append(profile)
-            
-        return jsonify({"success": True, "data": data}), 200
+        response_data = TeacherService.get_all_profiles(
+            current_teacher.teacher_id, 
+            page=page, 
+            per_page=per_page
+        )
+        return jsonify({"success": True, **response_data}), 200
     except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": True, "message": str(e)}), 500
+
+@teacher_bp.route('/stats', methods=['GET'])
+@verification_required
+def get_dashboard_stats(current_teacher):
+    try:
+        stats = TeacherService.get_dashboard_stats(current_teacher.teacher_id)
+        return jsonify({"success": True, "data": stats}), 200
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": True, "message": str(e)}), 500
 
 @teacher_bp.route('/<int:teacher_id>', methods=['GET'])

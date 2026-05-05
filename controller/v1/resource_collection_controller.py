@@ -59,6 +59,8 @@ def create_resource_route(current_teacher):
 @verification_required
 def get_my_resources(current_teacher):
     try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 12, type=int)
 
         filters = {
             "search": request.args.get('search'),
@@ -68,15 +70,16 @@ def get_my_resources(current_teacher):
             "status": request.args.get('status')
         }
 
-        resources = ResourceCollectionService.get_my_resources(
+        response_data = ResourceCollectionService.get_my_resources(
             current_teacher.teacher_id,
-            filters
+            filters,
+            page=page,
+            per_page=per_page
         )
 
         return jsonify({
             "success": True,
-            "data": resources,
-            "count": len(resources)
+            **response_data
         }), 200
     
     except Exception as e:
@@ -199,9 +202,31 @@ def get_comparison_data(current_teacher, v1_id, v2_id):
 @resource_collection_bp.route('/discover', methods=['GET'])
 @verification_required
 def discover_resources_route(current_teacher):
-    current_teacher_id = current_teacher.teacher_id
-    resources = ResourceCollectionService.get_discover_resources(current_teacher_id)
-    return jsonify({"success": True, "data": resources}), 200
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 12, type=int)
+
+        filters = {
+            "search": request.args.get('search'),
+            "subject_id": request.args.get('subject_id', type=int),
+            "grade_level_id": request.args.get('grade_level_id', type=int),
+            "content_type_id": request.args.get('content_type_id', type=int)
+        }
+
+        response_data = ResourceCollectionService.get_discover_resources(
+            current_teacher.teacher_id,
+            filters,
+            page=page,
+            per_page=per_page
+        )
+
+        return jsonify({
+            "success": True,
+            **response_data
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @resource_collection_bp.route('/remix/<int:collection_id>', methods=['POST'])

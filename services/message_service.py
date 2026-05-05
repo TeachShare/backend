@@ -45,19 +45,29 @@ class MessageService:
         return sorted(conversations, key=lambda x: x['timestamp'] or '', reverse=True)
 
     @staticmethod
-    def get_messages(teacher_id, partner_id):
-        messages = Message.query.filter(
+    def get_messages(teacher_id, partner_id, page=1, per_page=50):
+        pagination = Message.query.filter(
             or_(
                 and_(Message.sender_id == teacher_id, Message.receiver_id == partner_id),
                 and_(Message.sender_id == partner_id, Message.receiver_id == teacher_id)
             )
-        ).order_by(Message.created_at.asc()).all()
+        ).order_by(Message.created_at.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
 
-        # Mark as read
+        messages = pagination.items
+        
+        # Mark as read (only messages in this thread)
         Message.query.filter_by(sender_id=partner_id, receiver_id=teacher_id, is_read=False).update({"is_read": True})
         db.session.commit()
 
-        return [m.to_dict() for m in messages]
+        # Return reversed so it's chronological for the UI
+        return {
+            "messages": [m.to_dict() for m in reversed(messages)],
+            "total_pages": pagination.pages,
+            "current_page": pagination.page,
+            "has_next": pagination.has_next
+        }
 
     @staticmethod
     def save_message(sender_id, receiver_id, content, file_url=None, file_name=None, file_type=None):

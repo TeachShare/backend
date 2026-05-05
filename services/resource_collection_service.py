@@ -84,13 +84,12 @@ class ResourceCollectionService:
             raise e
 
     @staticmethod
-    def get_my_resources(teacher_id, filters=None):
+    def get_my_resources(teacher_id, filters=None, page=1, per_page=12):
         
         query = db.session.query(
-        ResourceCollection,
-        func.count(ResourceLike.collection_id).label('total_likes')
-      
-    )\
+            ResourceCollection,
+            func.count(ResourceLike.collection_id).label('total_likes')
+        )\
         .outerjoin(ResourceLike, ResourceCollection.collection_id == ResourceLike.collection_id)\
         .outerjoin(Subject, ResourceCollection.subject_id == Subject.subject_id)\
         .outerjoin(GradeLevel, ResourceCollection.grade_level_id == GradeLevel.grade_level_id)\
@@ -125,28 +124,34 @@ class ResourceCollectionService:
                 
         query = query.order_by(ResourceCollection.updated_at.desc())
 
-        my_collections = query.order_by(ResourceCollection.updated_at.desc()).all()
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         results = []
 
-        for col, total_likes in my_collections:
+        for col, total_likes in pagination.items:
             # Safer tag fetching to prevent loop crashes
             tag_names = [rt.tag.tag_name for rt in col.tags if rt.tag] if hasattr(col, 'tags') else []
             
             results.append({
-            "collection_id": col.collection_id,
-            "title": col.title or "Untitled",
-            "description": col.description if isinstance(col.description, str) else str(col.description or ""),
-            "is_published": col.is_published,
-            "category": col.subject.subject_name if col.subject else "No Subject",
-            "type": col.content_type.type_name if col.content_type else "No Type",
-            "grade": col.grade_level.grade_name if col.grade_level else "No Grade",
-            "tags": tag_names, 
-            "likes": total_likes,  
-            "downloads": 0,      
-            "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat()
-        })
+                "collection_id": col.collection_id,
+                "title": col.title or "Untitled",
+                "description": col.description if isinstance(col.description, str) else str(col.description or ""),
+                "is_published": col.is_published,
+                "category": col.subject.subject_name if col.subject else "No Subject",
+                "type": col.content_type.type_name if col.content_type else "No Type",
+                "grade": col.grade_level.grade_name if col.grade_level else "No Grade",
+                "tags": tag_names, 
+                "likes": total_likes,  
+                "downloads": 0,      
+                "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat()
+            })
         
-        return results
+        return {
+            "resources": results,
+            "total_pages": pagination.pages,
+            "current_page": pagination.page,
+            "has_next": pagination.has_next,
+            "total_count": pagination.total
+        }
     @staticmethod
     def get_resource_by_id(collection_id, current_user_id=None):
         collection = ResourceCollection.query.get(collection_id)
@@ -283,16 +288,8 @@ class ResourceCollectionService:
         db.session.add(new_version)
         db.session.flush()
 
-        if new_files_info:
-            for f in new_files_info:
-                db.session.add(ResourceFile(
-                    version_id=new_version.version_id,
-                    file_url=f.get('url'),
-                    file_name=f.get('name'),
-                    file_type=f.get('type'),
-                    file_size=f.get('size')
-                ))
-        elif last_v:
+        # 1. Always retain files from the previous version
+        if last_v:
             old_files = ResourceFile.query.filter_by(version_id=last_v.version_id).all()
             for old_f in old_files:
                 db.session.add(ResourceFile(
@@ -302,6 +299,18 @@ class ResourceCollectionService:
                     file_type=old_f.file_type,
                     file_size=old_f.file_size
                 ))
+
+        # 2. Append new files if they are provided
+        if new_files_info:
+            for f in new_files_info:
+                db.session.add(ResourceFile(
+                    version_id=new_version.version_id,
+                    file_url=f.get('url'),
+                    file_name=f.get('name'),
+                    file_type=f.get('type'),
+                    file_size=f.get('size')
+                ))
+                
         ResourceTag.query.filter_by(collection_id=old_collection_id).delete()
 
         for tag_string in data.get('tags', []):
@@ -348,19 +357,38 @@ class ResourceCollectionService:
 
 
     @staticmethod
-    def get_discover_resources(current_teacher_id):
+    def get_discover_resources(current_teacher_id, filters=None, page=1, per_page=12):
         # Main query for the collections
         query = db.session.query(ResourceCollection)\
             .options(joinedload(ResourceCollection.subject),
                     joinedload(ResourceCollection.grade_level),
                     joinedload(ResourceCollection.content_type))\
             .filter(ResourceCollection.owner_id != current_teacher_id)\
-            .filter(ResourceCollection.is_published == True)\
-            .order_by(ResourceCollection.updated_at.desc())
+            .filter(ResourceCollection.is_published == True)
         
+        if filters:
+            if filters.get('search'):
+                search_query = f"%{filters['search']}%"
+                query = query.filter(
+                    or_(
+                        ResourceCollection.title.ilike(search_query),
+                        cast(ResourceCollection.description, String).ilike(search_query)
+                    )
+                )
+
+            if filters.get('subject_id'):
+                query = query.filter(ResourceCollection.subject_id == filters['subject_id'])
+            if filters.get('grade_level_id'):
+                query = query.filter(ResourceCollection.grade_level_id == filters['grade_level_id'])
+            if filters.get('content_type_id'):
+                query = query.filter(ResourceCollection.content_type_id == filters['content_type_id'])
+
+        query = query.order_by(ResourceCollection.updated_at.desc())
+        
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         results = []
         
-        for collection in query.all():
+        for collection in pagination.items:
             # Manual fetch for the latest version since 'versions' relationship isn't set
             latest_v = ResourceVersion.query.filter_by(
                 collection_id=collection.collection_id, 
@@ -381,13 +409,19 @@ class ResourceCollectionService:
                 "subject": collection.subject.subject_name if collection.subject else "General",
                 "grade": collection.grade_level.grade_name if collection.grade_level else "All Grades",
                 "type": collection.content_type.type_name if collection.content_type else "Resource",
-                "tags": tag_names, # Now defined correctly
+                "tags": tag_names, 
                 "file_count": file_count,
                 "version_no": latest_v.version_no if latest_v else 1,
                 "updated_at": collection.updated_at.isoformat()
             })
 
-        return results
+        return {
+            "resources": results,
+            "total_pages": pagination.pages,
+            "current_page": pagination.page,
+            "has_next": pagination.has_next,
+            "total_count": pagination.total
+        }
     
     @staticmethod
     def remix_resource(original_collection_id, new_owner_id ):

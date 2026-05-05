@@ -43,7 +43,15 @@ def get_conversations(current_teacher):
 @verification_required
 def get_thread(current_teacher, partner_id):
     try:
-        messages = MessageService.get_messages(current_teacher.teacher_id, partner_id)
-        return jsonify({"success": True, "data": messages}), 200
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        
+        response_data = MessageService.get_messages(
+            current_teacher.teacher_id, 
+            partner_id, 
+            page=page, 
+            per_page=per_page
+        )
+        return jsonify({"success": True, **response_data}), 200
     except Exception as e:
         return jsonify({"error": True, "message": str(e)}), 500

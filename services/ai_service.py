@@ -32,9 +32,33 @@ class AIService:
             return f"# [Simulated AI Response for {content_type.capitalize()}]\n**Subject**: {subject}\n**Grade**: {grade}\n**Objectives**: {objectives}\n\nPlease set GROQ_API_KEY to see real AI content."
 
         system_prompts = {
-            "lesson": f"You are an expert educator. Create a detailed Lesson Plan for {subject} at the {grade} level. Focus on these objectives: {objectives}. Use Markdown formatting with clear H2 and H3 headers, bold text for emphasis, and bulleted lists. Include sections for: Topic, Duration, Learning Objectives, Materials Needed, Introduction, Main Activities, and Assessment. Make it visually structured.",
-            "strategy": f"You are an expert pedagogical consultant. Suggest innovative Teaching Strategies for {subject} at the {grade} level. Focus on these goals: {objectives}. Use Markdown formatting. Provide practical, engaging techniques with clear headings and numbered lists for implementation steps.",
-            "classroom": f"You are an expert instructional designer. Create Classroom Materials (like a worksheet structure or activity sheet) for {subject} at the {grade} level. Focus on: {objectives}. Use Markdown. Make it clear and age-appropriate with sections for Instructions, Questions, and Activities."
+            "lesson": (
+                f"You are an expert educator. Create a detailed Lesson Plan for {subject} at the {grade} level. "
+                f"Focus on: {objectives}. \n\n"
+                "STRUCTURE REQUIREMENTS:\n"
+                "1. Use exactly 5 main sections with '## ' (H2 headers): 'Overview', 'Learning Objectives', 'Materials & Preparation', 'Instructional Procedure', and 'Assessment'.\n"
+                "2. Use '### ' (H3 headers) only for sub-steps within the Instructional Procedure.\n"
+                "3. Use bulleted lists for objectives and materials.\n"
+                "4. Do NOT use '#' (H1) or more than two levels of headers.\n"
+                "5. Ensure the content is professional, detailed, and visually structured."
+            ),
+            "strategy": (
+                f"You are an expert pedagogical consultant. Suggest innovative Teaching Strategies for {subject} at the {grade} level. "
+                f"Focus on: {objectives}. \n\n"
+                "STRUCTURE REQUIREMENTS:\n"
+                "1. Use '## ' (H2 headers) for: 'Strategy Summary', 'Pedagogical Foundation', 'Implementation Steps', and 'Expected Outcomes'.\n"
+                "2. Use numbered lists for implementation steps.\n"
+                "3. Keep the layout clean and avoid excessive nesting of headers.\n"
+                "4. Provide practical, engaging techniques."
+            ),
+            "classroom": (
+                f"You are an expert instructional designer. Create Classroom Materials for {subject} at the {grade} level. "
+                f"Focus on: {objectives}. \n\n"
+                "STRUCTURE REQUIREMENTS:\n"
+                "1. Use '## ' (H2 headers) for: 'Instructions', 'Core Activities', 'Practice Questions', and 'Extension Tasks'.\n"
+                "2. Make the language age-appropriate for {grade}.\n"
+                "3. Use clear separators and lists to make it easy for students to follow."
+            )
         }
 
         prompt = system_prompts.get(content_type, "You are a helpful education assistant.")

@@ -1,9 +1,28 @@
 from flask import Blueprint, jsonify
-from models import Teacher, ResourceCollection, AIGeneratedContent, Follower, db
+from models import Teacher, ResourceCollection, AIGeneratedContent, Follower, Subject, GradeLevel, ContentType, db
 from lib.guards import verification_required
 from sqlalchemy import func
 
 metadata_bp = Blueprint('metadata_controller', __name__)
+
+@metadata_bp.get('/form-options')
+@metadata_bp.get('/metadata/form-options') # Legacy compatibility
+def get_form_options():
+    try:
+        subjects = Subject.query.order_by(Subject.rank.asc(), Subject.subject_name.asc()).all()
+        grade_levels = GradeLevel.query.order_by(GradeLevel.rank.asc()).all()
+        content_types = ContentType.query.order_by(ContentType.type_name.asc()).all()
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "subjects": [{"id": s.subject_id, "name": s.subject_name} for s in subjects],
+                "grade_levels": [{"id": g.grade_level_id, "name": g.grade_name} for g in grade_levels],
+                "content_types": [{"id": c.content_type_id, "name": c.type_name} for c in content_types]
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @metadata_bp.get('/dashboard-stats')
 @verification_required
