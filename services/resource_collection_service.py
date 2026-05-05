@@ -34,7 +34,7 @@ class ResourceCollectionService:
             db.session.flush() # Get the collection_id
             
             # 2. CREATE VERSION 1 IMMEDIATELY
-            # We set is_latest=True so it is immediately "Discoverable"
+            # We set is_latest=True so pipit is immediately "Discoverable"
             new_version = ResourceVersion(
                 collection_id = new_collection.collection_id,
                 version_no = 1,
