@@ -113,5 +113,26 @@ def handle_send_message(data):
 # ROUTES
 app.register_blueprint(v1_bp, url_prefix="/api/v1")
 
+# CHIPS (Partitioned Cookies) Fix for Cross-Domain Deployment
+@app.after_request
+def add_partitioned_attribute(response):
+    if IS_PRODUCTION:
+        for name, cookie in response.headers.getlist('Set-Cookie'):
+            if 'SameSite=None' in cookie and 'Partitioned' not in cookie:
+                # Add Partitioned attribute to the header
+                response.headers.add('Set-Cookie', f"{cookie}; Partitioned")
+                # Remove the original header (since we added a new corrected one)
+                # Note: This is a bit tricky with getlist/add, so we'll use a more surgical approach
+        
+        # More robust way to replace the header values
+        cookies = response.headers.getlist('Set-Cookie')
+        response.headers.remove('Set-Cookie')
+        for cookie in cookies:
+            if 'SameSite=None' in cookie and 'Partitioned' not in cookie:
+                response.headers.add('Set-Cookie', f"{cookie}; Partitioned")
+            else:
+                response.headers.add('Set-Cookie', cookie)
+    return response
+
 if __name__ == '__main__':
     socketio.run(app, debug=True)

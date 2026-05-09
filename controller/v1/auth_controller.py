@@ -22,7 +22,8 @@ def set_auth_cookie(response, name, value, expires=None):
         samesite='None' if IS_PRODUCTION else 'Lax',
         secure=IS_PRODUCTION,
         httponly=False, # Allow frontend to read metadata cookies (except JWT)
-        max_age=expires if expires else 60*60*24*7 # 7 days default
+        max_age=expires if expires else 60*60*24*7, # 7 days default
+        partitioned=IS_PRODUCTION # Mandatory for Chrome's cross-site cookie privacy
     )
 
 @auth_bp.route('/register', methods=['POST'])
