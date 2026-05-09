@@ -73,7 +73,12 @@ google = oauth.register(
 )
 
 # CORS
-CORS(app, supports_credentials=True, origins=[CORS_ORIGIN])
+CORS_ORIGINS = [CORS_ORIGIN]
+if not IS_PRODUCTION:
+    # Allow any local origin for development flexibility
+    CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+CORS(app, supports_credentials=True, origins=CORS_ORIGINS)
 
 # SOCKET IO HANDLERS
 @socketio.on('join')
