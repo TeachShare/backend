@@ -1,9 +1,9 @@
-from models import Teacher, UserAuth, db, VerificationCodes
+from models import Teacher, UserAuth, db
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy.exc import IntegrityError
-from flask_jwt_extended import create_access_token, set_access_cookies
-from datetime import datetime, timezone, timedelta
-from lib import send_verification_code
+from flask_jwt_extended import create_access_token
+from datetime import datetime, timezone
+from supabase_config import supabase
 
 class AuthService:
     @staticmethod
@@ -22,9 +22,28 @@ class AuthService:
         
         if Teacher.query.filter_by(username=username).first():
             return {"success": False, "message": "This username is already taken!"}
-        
         try:
-            # Assign a default avatar using Dicebear based on username
+            # 1. Trigger Supabase Auth Sign Up (This sends the email to anyone!)
+            if supabase:
+                try:
+                    # Use dictionary for parameters as required by this SDK version
+                    sb_response = supabase.auth.sign_up({
+                        "email": email,
+                        "password": password,
+                        "options": {
+                            "data": {
+                                "first_name": first_name,
+                                "username": username
+                            }
+                        }
+                    })
+                    print(f"DEBUG: Supabase Sign Up successful for {email}")
+                except Exception as sb_err:
+                    print(f"SUPABASE SIGNUP ERROR: {sb_err}")
+            else:
+                print("DEBUG: Supabase client is NOT initialized. Check your environment variables.")
+            
+            # 2. Save to local Teacher table for app logic
             default_avatar = f"https://api.dicebear.com/7.x/avataaars/svg?seed={username}"
             
             new_teacher = Teacher(
@@ -35,7 +54,6 @@ class AuthService:
                 profile_image_url=default_avatar
             )
             db.session.add(new_teacher)
-
             db.session.flush()
 
             new_auth = UserAuth(
@@ -45,42 +63,43 @@ class AuthService:
             db.session.add(new_auth)
             db.session.commit()
 
-            send_verification_code(new_teacher)
-
-            verif_entry = VerificationCodes.query.filter_by(user_id=new_teacher.teacher_id).order_by(VerificationCodes.created_at.desc()).first()
-
-            
             return {
                 "success": True, 
-                "message": "Registration complete! Please verify your email.",
+                "message": "Registration complete! Please check your email for the verification code.",
                 "id": new_teacher.teacher_id,
                 "username": new_teacher.username,
-                "verification_token": verif_entry.token if verif_entry else None,
+                "verification_token": "supabase_managed", # UI fallback
                 "is_verified": False 
             }
         
-        except IntegrityError as e:
-            db.session.rollback()
-            # This prints the REAL error (like "joined_date cannot be null") to your console
-            print(f"DATABASE ERROR: {e.orig}") 
-            return {"success": False, "message": "A database integrity error occurred."}
         except Exception as e:
+            db.session.rollback()
             print(f"DEBUG REGISTER ERROR: {e}")
-            return {"success": False, "message": f"An unexpected error occured: {e}"}
+            return {"success": False, "message": f"An error occured: {str(e)}"}
         
 
     @staticmethod
     def get_verification_info(token):
-        record = VerificationCodes.query.filter_by(token=token).first()
-        if not record:
-            return None
+        # Since we are using Supabase, we don't use database tokens.
+        # The frontend calls this to get the user's email to show on the verify page.
+        from flask_jwt_extended import get_jwt_identity
         
-        teacher = record.teacher
-        return {
-            "id": teacher.teacher_id,
-            "email": teacher.email,
-            "is_verified": teacher.is_verified
-        }
+        try:
+            teacher_id = get_jwt_identity()
+            if not teacher_id:
+                return None
+            
+            teacher = Teacher.query.get(teacher_id)
+            if not teacher:
+                return None
+                
+            return {
+                "id": teacher.teacher_id,
+                "email": teacher.email,
+                "is_verified": teacher.is_verified
+            }
+        except:
+            return None
 
     @staticmethod
     def login(data):
@@ -91,22 +110,28 @@ class AuthService:
         if not found_teacher:
             return {"success": False, "message": "Email not found!"}
         
-
         if found_teacher.auth:
-            if found_teacher.auth.auth_provider != 'local' or not found_teacher.auth.hashed_password:
-                 return {"success": False, "message": f"This account uses {found_teacher.auth.auth_provider.capitalize()} Login. Please use that to sign in."}, None
+            if found_teacher.auth.auth_provider != 'local':
+                 return {"success": False, "message": f"This account uses {found_teacher.auth.auth_provider.capitalize()} Login."}, None
 
             if check_password_hash(found_teacher.auth.hashed_password, password):
+                # Check verification status with Supabase if not already verified locally
+                if not found_teacher.is_verified and supabase:
+                    try:
+                        # Attempt to sign in to Supabase to check status
+                        sb_auth = supabase.auth.sign_in_with_password({
+                            "email": email, 
+                            "password": password
+                        })
+                        if sb_auth.user.email_confirmed_at:
+                            found_teacher.is_verified = True
+                            db.session.commit()
+                    except:
+                        pass # User might not be confirmed in SB yet
+
                 access_token = create_access_token(identity=str(found_teacher.teacher_id))
 
-                verif_entry = VerificationCodes.query.filter_by(user_id=found_teacher.teacher_id).order_by(VerificationCodes.created_at.desc()).first()
-
-                # If unverified but no code exists, generate one now
-                if not found_teacher.is_verified and not verif_entry:
-                    send_verification_code(found_teacher)
-                    verif_entry = VerificationCodes.query.filter_by(user_id=found_teacher.teacher_id).order_by(VerificationCodes.created_at.desc()).first()
-
-                payload= {
+                return {
                     "success": True,
                     "message": f"Welcome , {found_teacher.first_name}!",
                     "user": {
@@ -116,19 +141,15 @@ class AuthService:
                     },
                     "is_verified": found_teacher.is_verified,
                     "is_suspended": found_teacher.is_suspended,
-                    "verification_token": verif_entry.token if verif_entry else None
-                }
-
-                return payload, access_token
-        else:
-            return {"success": False, "message": "This account uses Google Login."}, None
+                    "verification_token": "supabase_managed" if not found_teacher.is_verified else None
+                }, access_token
         
         return {"success": False, "message": "Invalid email or password"}, None
     
     @staticmethod
     def logout():
         return {"success": True, "message": "Successfully logged out!"}, None
-    
+
     @staticmethod
     def login_or_register_google(user_info):
         google_id = user_info.get('sub')
@@ -212,108 +233,58 @@ class AuthService:
 
 
         return payload, access_token
-    
 
     @staticmethod
     def verification_code(teacher_id, user_input_code, token=None):
-        if token:
-            record = VerificationCodes.query.filter_by(token=token).first()
-        else:
-            t_id = int(teacher_id)
-            record = VerificationCodes.query.filter_by(user_id=t_id).order_by(VerificationCodes.created_at.desc()).first()
+        teacher = Teacher.query.get(teacher_id)
+        if not teacher:
+            return {"error": "Teacher not found", "status": 404}
 
-        if not record:
-            return { "error": "No verification session found. Please request a new code.", "status": 404 }
-        
-        # Use timezone-aware comparison with safety fallback
-        expires_at = record.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if not supabase:
+            return {"error": "Auth service unavailable", "status": 500}
+
+        try:
+            # Verify OTP via Supabase using dictionary for params
+            print(f"DEBUG VERIFY: Attempting OTP verify for {teacher.email} with code {user_input_code}")
+            verify = supabase.auth.verify_otp({
+                "email": teacher.email,
+                "token": user_input_code,
+                "type": "signup"
+            })
             
-        if datetime.now(timezone.utc) > expires_at:
-            db.session.delete(record)
-            db.session.commit()
-            return {"error": "Verification code has expired. Please request a new one.", "status": 404 }
+            if verify.user:
+                print(f"DEBUG VERIFY: Success for {teacher.email}")
+                teacher.is_verified = True
+                db.session.commit()
+                return {"message": "Verified successfully", "status": 200}
+        except Exception as e:
+            print(f"DEBUG VERIFY ERROR: {e}")
+            return {"error": str(e), "status": 400}
         
-        if not check_password_hash(record.code_hash, user_input_code):
-            return {"error": "Invalid verification code. Please check and try again.", "status": 400}
-        
-        teacher = record.teacher
-        if teacher:
-            teacher.is_verified = True
-            VerificationCodes.query.filter_by(user_id=teacher.teacher_id).delete()
-            db.session.commit()
-            return {"message": "Verified successfully", "status": 200}
-        
-        return {"error": "Teacher not found", "status": 404}
+        return {"error": "Invalid code", "status": 400}
     
     @staticmethod
     def resend_code(teacher_id):
         teacher = Teacher.query.get(teacher_id)
         if not teacher:
+            print(f"DEBUG RESEND: Teacher {teacher_id} not found")
             return {"success": False, "message": "Teacher not found."}, 404
         
-        if teacher.is_verified:
-            return {"success": False, "message": "Account already verified"}, 400
-        
+        if not supabase:
+            print("DEBUG RESEND: Supabase not initialized")
+            return {"success": False, "message": "Auth service unavailable."}, 500
+
         try:
-            # Look for existing token to keep the URL stable
-            existing_record = VerificationCodes.query.filter_by(user_id=teacher.teacher_id).first()
-            old_token = existing_record.token if existing_record else None
-
-            # Delete old codes
-            VerificationCodes.query.filter_by(user_id=teacher.teacher_id).delete()
-
-            # Send new code
-            from lib import send_verification_code
-            import secrets
-            from werkzeug.security import generate_password_hash
-            from flask_mailman import EmailMessage
-
-            # Custom inline logic to support stable token
-            code = f"{secrets.randbelow(1000000):06d}"
-            token = old_token if old_token else secrets.token_urlsafe(32)
-            hashed_code = generate_password_hash(code)
-
-            new_code = VerificationCodes(
-                user_id = teacher.teacher_id,
-                code_hash = hashed_code,
-                token = token,
-                expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-            )
-            db.session.add(new_code)
-            db.session.commit()
-
-            # Email logic (copied from send_verification_code for consistency)
-            html_body = f"""
-            <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
-                <h2 style="color: #10b981; margin-bottom: 16px;">Verify your TeachShare account</h2>
-                <p style="color: #475569; font-size: 16px;">Hi {teacher.first_name},</p>
-                <p style="color: #475569; font-size: 16px;">Use the code below to complete your verification. This code is valid for a limited time.</p>
-                
-                <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
-                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1e293b;">{code}</span>
-                </div>
-                
-                <p style="color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; pt: 16px;">
-                    If you didn't request this code, you can safely ignore this email.
-                </p>
-            </div>
-            """
-            msg = EmailMessage(subject="Your TeachShare Verification Code", body=html_body, to=[teacher.email])
-            msg.content_subtype = "html"
-            msg.send()
-            
-            return {
-                "success": True, 
-                "message": "A new code has been sent!",
-                "verification_token": token
-            }, 200
-
+            # Resend OTP via Supabase using dictionary for params
+            print(f"DEBUG RESEND: Requesting new code for {teacher.email}")
+            supabase.auth.resend({
+                "type": "signup",
+                "email": teacher.email
+            })
+            return {"success": True, "message": "A new code has been sent!"}, 200
         except Exception as e:
-            db.session.rollback()
-            print(f"RESEND ERROR: {e}")
-            return {"success": False, "message": "Failed to resend code."}, 500
+            print(f"DEBUG RESEND ERROR: {e}")
+            return {"success": False, "message": str(e)}, 500
 
     @staticmethod
     def change_password(teacher_id, current_password, new_password):

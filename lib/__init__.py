@@ -1,2 +1,1 @@
-from .send_verification_code import send_verification_code
 from .guards import verification_required

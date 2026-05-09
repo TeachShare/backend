@@ -32,10 +32,11 @@ def register():
         return jsonify(result), 400
 
 @auth_bp.route('/verification-info/<string:token>', methods=['GET'])
+@jwt_required(optional=True)
 def get_verification_info(token):
     info = AuthService.get_verification_info(token)
     if not info:
-        return jsonify({"error": "Invalid or expired token"}), 404
+        return jsonify({"error": "Invalid or expired session"}), 404
     
     return jsonify({"success": True, "data": info}), 200
     

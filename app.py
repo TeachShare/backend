@@ -11,7 +11,6 @@ from extensions import jwt, oauth
 from models import db
 from flask_cors import CORS
 from flask_migrate import Migrate
-from flask_mailman import Mail
 from flask_socketio import SocketIO, emit, join_room
 from services.message_service import MessageService
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -29,14 +28,6 @@ app.config['SECRET_KEY'] = os.getenv("APP_SECRET_KEY", "dev-mode-fallback-only")
 app.config['GOOGLE_CLIENT_ID'] = os.getenv("GOOGLE_CLIENT_ID")
 app.config['GOOGLE_CLIENT_SECRET'] = os.getenv("GOOGLE_CLIENT_SECRET")
 # app.secret_key is also set by config['SECRET_KEY'] automatically
-
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = os.getenv("GOOGLE_EMAIL")
-app.config['MAIL_PASSWORD'] = os.getenv("GOOGLE_EMAIL_PASSWORD") 
-
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv("GOOGLE_EMAIL")
 
 db_url = os.getenv("DATABASE_URL")
 if db_url:
@@ -70,7 +61,6 @@ db.init_app(app)
 jwt.init_app(app)
 oauth.init_app(app)
 migrate = Migrate(app, db)
-mail = Mail(app)
 socketio = SocketIO(app, cors_allowed_origins=CORS_ORIGIN, async_mode='eventlet')
 
 # REGISTER GOOGLE
