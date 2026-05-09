@@ -19,7 +19,6 @@ defusedxml==0.7.1
 distro==1.9.0
 dnspython==2.8.0
 eventlet==0.41.0
-gunicorn==23.0.0
 Flask==3.1.3
 flask-cors==6.0.2
 Flask-JWT-Extended==4.7.1
@@ -32,6 +31,7 @@ fpdf2==2.8.7
 freetype-py==2.5.1
 greenlet==3.3.2
 groq==1.2.0
+gunicorn==23.0.0
 h11==0.16.0
 h2==4.3.0
 hpack==4.1.0
@@ -50,6 +50,7 @@ markdown2==2.5.5
 MarkupSafe==3.0.3
 openai==2.33.0
 oscrypto==1.3.0
+packaging==26.2
 pillow==12.2.0
 psycopg==3.3.3
 psycopg-c==3.3.3
@@ -61,7 +62,7 @@ pyHanko==0.35.0
 pyhanko-certvalidator==0.31.0
 PyJWT==2.12.0
 pypdf==6.10.2
-python-bidi==0.6.7
+python-bidi==0.4.2
 python-dotenv==1.2.2
 python-engineio==4.13.1
 python-socketio==5.16.1
