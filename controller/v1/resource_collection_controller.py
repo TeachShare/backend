@@ -503,6 +503,7 @@ def get_eligible_for_collab_route(current_teacher):
 
         results = []
         for r in owned_resources:
+            # Check if collaboration is explicitly enabled
             mode = str(r.collaboration_mode).strip().lower() if r.collaboration_mode else 'none'
             
             results.append({

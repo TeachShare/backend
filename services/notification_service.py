@@ -1,7 +1,33 @@
 from models import Notification, db, Teacher, ResourceCollection
 from flask_socketio import emit
+from datetime import datetime, timezone
 
 class NotificationService:
+    @staticmethod
+    def get_time_ago(dt):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff = now - dt
+        
+        seconds = diff.total_seconds()
+        if seconds < 60:
+            return "Just now"
+        
+        minutes = seconds / 60
+        if minutes < 60:
+            return f"{int(minutes)}m ago"
+            
+        hours = minutes / 60
+        if hours < 24:
+            return f"{int(hours)}h ago"
+            
+        days = hours / 24
+        if days < 7:
+            return f"{int(days)}d ago"
+            
+        return dt.strftime("%b %d")
+
     @staticmethod
     def create_notification(recipient_id, notification_type, sender_id=None, collection_id=None, extra_data=None):
         try:
@@ -84,7 +110,7 @@ class NotificationService:
             "avatar": n.sender.first_name if n.sender else "System",
             "action": NotificationService.get_action_text(n.notification_type),
             "target": n.collection.title if n.collection else "",
-            "time": "Just now" 
+            "time": NotificationService.get_time_ago(n.created_at)
         }
 
     @staticmethod

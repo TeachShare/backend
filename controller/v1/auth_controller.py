@@ -106,6 +106,7 @@ def get_current_user():
         "role": teacher.role,
         "institution": teacher.institution,
         "bio": teacher.bio,
+        "auth_provider": teacher.auth.auth_provider if teacher.auth else "local",
         "is_verified": teacher.is_verified,
         "is_admin": teacher.is_admin
     }

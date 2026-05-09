@@ -5,13 +5,15 @@ from sqlalchemy import func
 
 metadata_bp = Blueprint('metadata_controller', __name__)
 
-@metadata_bp.get('/form-options')
-@metadata_bp.get('/metadata/form-options') # Legacy compatibility
+@metadata_bp.route('/form-options', methods=['GET'])
+@metadata_bp.route('/metadata/form-options', methods=['GET']) # Legacy compatibility
 def get_form_options():
     try:
         subjects = Subject.query.order_by(Subject.rank.asc(), Subject.subject_name.asc()).all()
         grade_levels = GradeLevel.query.order_by(GradeLevel.rank.asc()).all()
         content_types = ContentType.query.order_by(ContentType.type_name.asc()).all()
+
+        print(f"DEBUG: Found {len(subjects)} subjects, {len(grade_levels)} grades, {len(content_types)} types.")
 
         return jsonify({
             "success": True,

@@ -387,6 +387,19 @@ class ResourceCollectionService:
         if updater_id and not ResourceCollectionService.has_edit_permission(old_collection_id, updater_id):
             raise ValueError("Unauthorized to update this resource")
         
+        is_published = data.get('is_published', collection.is_published)
+
+        # Validation for publishing
+        if is_published:
+            required_fields = ['title', 'subject_id', 'grade_level_id', 'content_type_id']
+            for field in required_fields:
+                val = data.get(field)
+                if val is None: # Use the existing value if not provided in payload
+                    val = getattr(collection, field)
+                
+                if not val:
+                    raise ValueError(f"Missing required field for publishing: '{field}'")
+
         estimate_duration = data.get('estimate_duration')
         if estimate_duration and len(str(estimate_duration)) > 100:
             raise ValueError("Estimate duration must be less than 100 characters")
@@ -423,7 +436,7 @@ class ResourceCollectionService:
         new_version = ResourceVersion(
             collection_id = old_collection_id,
             version_no = new_v_no,
-            notes = data.get('notes', 'updated resources'),
+            notes = data.get('version_notes') or data.get('notes') or 'updated resources',
             is_latest = True,
             is_remix = False,
             parent_version_id = last_v.version_id if last_v else None,
@@ -490,28 +503,24 @@ class ResourceCollectionService:
 
     @staticmethod
     def get_version_history(collection_id):
-        current_resource = ResourceCollection.query.get(collection_id)
-        if not current_resource: return []
-
-        versions = db.session.query(ResourceVersion, ResourceCollection)\
-            .join(ResourceCollection, ResourceVersion.collection_id == ResourceCollection.collection_id)\
-            .filter(ResourceCollection.owner_id == current_resource.owner_id)\
-            .filter(ResourceCollection.title == current_resource.title)\
+        versions = db.session.query(ResourceVersion)\
+            .filter(ResourceVersion.collection_id == collection_id)\
             .order_by(ResourceVersion.version_no.desc())\
             .all()
 
         history = []
-        for version, collection in versions:
+        for version in versions:
+            collection = ResourceCollection.query.get(version.collection_id)
             file_count = ResourceFile.query.filter_by(version_id=version.version_id).count()
             history.append({
-                "collection_id": collection.collection_id,
+                "collection_id": version.collection_id,
                 "version_id": version.version_id,
                 "version_no": version.version_no,
                 "notes": version.notes,
                 "is_latest": version.is_latest, 
                 "created_at": version.created_at.isoformat(),
                 "file_count": file_count,
-                "author": f"{current_resource.owner.first_name} {current_resource.owner.last_name}"
+                "author": f"{version.creator.first_name} {version.creator.last_name}" if version.creator else "Unknown"
             })
         return history
 
@@ -645,14 +654,12 @@ class ResourceCollectionService:
         if not original_collection.allow_remixing:
             raise ValueError("Remixing is disabled for this resource")
 
-        original_version = ResourceVersion.query.filter_by(
-            collection_id=original_collection_id, 
-            is_latest=True
-        ).first()
+        original_versions = ResourceVersion.query.filter_by(
+            collection_id=original_collection_id
+        ).order_by(ResourceVersion.version_no.asc()).all()
 
         try:
             # 2. Spawn a BRAND NEW Collection for the new owner
-            # We add " (Remix)" to the title or keep it same based on your UI preference
             remixed_collection = ResourceCollection(
                 title=f"{original_collection.title} (Remix)",
                 description=original_collection.description,
@@ -660,28 +667,32 @@ class ResourceCollectionService:
                 subject_id=original_collection.subject_id,
                 grade_level_id=original_collection.grade_level_id,
                 content_type_id=original_collection.content_type_id,
+                estimate_duration=original_collection.estimate_duration,
+                student_summary=original_collection.student_summary,
+                allow_remixing=original_collection.allow_remixing,
+                visibility=original_collection.visibility,
                 is_published=False # Remixes start as drafts
             )
             db.session.add(remixed_collection)
             db.session.flush()
 
-            # 3. Create Version 1 for this new collection
-            # Here we cite the original by setting parent_version_id
-            new_version = ResourceVersion(
-                collection_id=remixed_collection.collection_id,
-                version_no=1,
-                notes=f"Remixed from {original_collection.owner.first_name} {original_collection.owner.last_name}",
-                is_latest=True,
-                is_remix=True, # Mark as a remix
-                parent_version_id=original_version.version_id if original_version else None,
-                created_by=new_owner_id
-            )
-            db.session.add(new_version)
-            db.session.flush()
+            # 3. Clone ALL Versions
+            for ov in original_versions:
+                new_version = ResourceVersion(
+                    collection_id=remixed_collection.collection_id,
+                    version_no=ov.version_no,
+                    notes=ov.notes,
+                    is_latest=ov.is_latest,
+                    is_remix=True, # Mark as a remix
+                    parent_version_id=ov.version_id, # Cite the original version
+                    created_by=new_owner_id,
+                    created_at=ov.created_at # Preserve timing
+                )
+                db.session.add(new_version)
+                db.session.flush()
 
-            # 4. Clone Files (Reference the same Appwrite URLs)
-            if original_version:
-                original_files = ResourceFile.query.filter_by(version_id=original_version.version_id).all()
+                # 4. Clone Files for each version
+                original_files = ResourceFile.query.filter_by(version_id=ov.version_id).all()
                 for f in original_files:
                     db.session.add(ResourceFile(
                         version_id=new_version.version_id,
@@ -692,7 +703,7 @@ class ResourceCollectionService:
                         file_hash=f.file_hash
                     ))
 
-            # 5. Clone Tags
+            # 5. Clone Tags (Attached to the Collection)
             original_tags = ResourceTag.query.filter_by(collection_id=original_collection_id).all()
             for ot in original_tags:
                 db.session.add(ResourceTag(
@@ -728,6 +739,10 @@ class ResourceCollectionService:
             raise e
 
     @staticmethod
+    def delete_resource(collection_id, teacher_id):
+        return ResourceCollectionService.delete_resource_permanently(collection_id, teacher_id)
+
+    @staticmethod
     def delete_resource_permanently(collection_id, teacher_id):
         # 1. Ensure the teacher actually owns this collection
         collection = ResourceCollection.query.filter_by(
@@ -739,21 +754,37 @@ class ResourceCollectionService:
             raise ValueError("Resource not found or unauthorized.")
 
         try:
-            # 2. Get all versions associated with this collection to find files
+            # 2. Get all versions associated with this collection
             versions = ResourceVersion.query.filter_by(collection_id=collection_id).all()
             version_ids = [v.version_id for v in versions]
 
             # 3. DELETE FROM CHILD TABLES FIRST (The Order Matters!)
+            from models import ResourceLike, ResourceComment, ResourceRating, ResourceCollaborator, Notification, UserActivity
             
-            # Remove File References
-            if version_ids:
-                ResourceFile.query.filter(ResourceFile.version_id.in_(version_ids)).delete(synchronize_session=False)
+            # Remove Likes, Comments, Ratings, Collaborators
+            ResourceLike.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
+            ResourceComment.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
+            ResourceRating.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
+            ResourceCollaborator.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
+
+            # Handle Notifications and Activities
+            Notification.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
+            UserActivity.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
             
             # Remove Tag Links
             ResourceTag.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
-            
-            # Remove Versions
-            ResourceVersion.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
+
+            # Handle File References and Versions
+            if version_ids:
+                # Set parent_version_id to NULL for any versions (remixes) pointing to these versions
+                ResourceVersion.query.filter(ResourceVersion.parent_version_id.in_(version_ids))\
+                    .update({ResourceVersion.parent_version_id: None}, synchronize_session=False)
+                
+                # Remove files
+                ResourceFile.query.filter(ResourceFile.version_id.in_(version_ids)).delete(synchronize_session=False)
+                
+                # Remove versions
+                ResourceVersion.query.filter_by(collection_id=collection_id).delete(synchronize_session=False)
 
             # 4. FINALLY: Remove the Collection itself
             db.session.delete(collection)

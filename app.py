@@ -58,6 +58,47 @@ app.config["SESSION_COOKIE_DOMAIN"] = None  # Prevents domain-locking issues on 
 
 # INIT EXTENSIONS
 db.init_app(app)
+
+# AUTO-SEED DATA (Crucial for fresh production DBs)
+with app.app_context():
+    from models import Subject, GradeLevel, ContentType
+    try:
+        # 1. Seed Subjects
+        if Subject.query.count() == 0:
+            print("Auto-seeding Subjects...")
+            subjects = [
+                ("Mathematics", "General", 1), ("Science", "General", 2),
+                ("English Language Arts", "General", 3), ("Social Studies", "General", 4),
+                ("Art", "Elective", 5), ("Music", "Elective", 6),
+                ("Physical Education", "General", 7), ("Computer Science", "STEM", 8)
+            ]
+            for name, tier, rank in subjects:
+                db.session.add(Subject(subject_name=name, tier=tier, rank=rank))
+        
+        # 2. Seed Grade Levels
+        if GradeLevel.query.count() == 0:
+            print("Auto-seeding Grade Levels...")
+            grades = [
+                ("Preschool", "Early Childhood", 1), ("Kindergarten", "Early Childhood", 2),
+                ("Elementary", "Primary", 3), ("Secondary", "Junior High", 4),
+                ("Senior High School", "Secondary", 5), ("College / Higher Education", "Tertiary", 6)
+            ]
+            for name, tier, rank in grades:
+                db.session.add(GradeLevel(grade_name=name, tier=tier, rank=rank))
+        
+        # 3. Seed Content Types
+        if ContentType.query.count() == 0:
+            print("Auto-seeding Content Types...")
+            types = ["Lesson Plan", "Worksheet", "Assessment", "Activity", "Syllabus"]
+            for name in types:
+                db.session.add(ContentType(type_name=name))
+        
+        db.session.commit()
+        print("AUTO-SEED: Database tables populated successfully.")
+    except Exception as e:
+        print(f"AUTO-SEED ERROR: {e}")
+        db.session.rollback()
+
 jwt.init_app(app)
 oauth.init_app(app)
 migrate = Migrate(app, db)
