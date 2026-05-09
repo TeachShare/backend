@@ -13,6 +13,7 @@ class CommunityPost(db.Model):
     
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = db.Column(db.DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    is_hidden = db.Column(db.Boolean, default=False, nullable=False)
 
     author = db.relationship('Teacher', backref=db.backref('post_comments', lazy='dynamic'))
     likes = db.relationship('PostLike', backref='post', lazy='dynamic', cascade="all, delete-orphan")
@@ -44,6 +45,7 @@ class PostComment(db.Model):
     
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_hidden = db.Column(db.Boolean, default=False, nullable=False)
 
     # UPDATED: Renamed backref to prevent collision with CommunityPost
     author = db.relationship('Teacher', backref=db.backref('authored_comments', lazy='dynamic'))

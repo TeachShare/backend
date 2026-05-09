@@ -25,4 +25,13 @@ class FollowService:
         else:
             follower.followed.append(followed)
             db.session.commit()
+
+            # Log Activity
+            from services.activity_service import ActivityService
+            ActivityService.log_activity(
+                user_id=follower_id,
+                activity_type='follow_user',
+                target_user_id=followed_id
+            )
+
             return {"following": True, "message": f"You are now following {followed.first_name}"}, 200

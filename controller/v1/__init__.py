@@ -6,6 +6,8 @@ from .teacher_controller import teacher_bp
 from .community_controller import community_bp
 from .message_controller import message_bp
 from .ai_controller import ai_bp
+from .notification_controller import notification_bp
+from .moderation_controller import moderation_bp
 
 v1_bp = Blueprint('v1', __name__)
 
@@ -18,3 +20,5 @@ v1_bp.register_blueprint(teacher_bp, url_prefix='/teachers')
 v1_bp.register_blueprint(community_bp, url_prefix='/community')
 v1_bp.register_blueprint(message_bp, url_prefix='/messages')
 v1_bp.register_blueprint(ai_bp, url_prefix='/ai')
+v1_bp.register_blueprint(notification_bp, url_prefix='/notifications')
+v1_bp.register_blueprint(moderation_bp, url_prefix='/moderation')

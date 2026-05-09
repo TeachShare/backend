@@ -1,13 +1,21 @@
 from models import Teacher, ResourceCollection, db, Follower
 from sqlalchemy.sql import func
+from sqlalchemy import or_
 
 class TeacherService:
     @staticmethod
-    def get_profile(teacher_id, current_user_id=None):
-        teacher = Teacher.query.get(teacher_id)
+    def get_profile(teacher_id=None, username=None, current_user_id=None):
+        if teacher_id:
+            teacher = Teacher.query.get(teacher_id)
+        elif username:
+            teacher = Teacher.query.filter_by(username=username).first()
+        else:
+            return None
+
         if not teacher:
             return None
         
+        teacher_id = teacher.teacher_id # Ensure we have the ID for queries
         followers_count = teacher.followers.count()
         following_count = teacher.followed.count()
         resources_count = ResourceCollection.query.filter_by(owner_id=teacher_id, is_published=True).count()
@@ -21,6 +29,7 @@ class TeacherService:
 
         return {
             "id": teacher.teacher_id,
+            "username": teacher.username,
             "first_name": teacher.first_name,
             "last_name": teacher.last_name,
             "email": teacher.email,
@@ -31,6 +40,13 @@ class TeacherService:
             "is_verified": teacher.is_verified,
             "is_following": is_following,
             "joined_date": teacher.joined_date.isoformat(),
+            "settings": {
+                "theme_preference": teacher.theme_preference,
+                "email_notifications": teacher.email_notifications,
+                "push_notifications": teacher.push_notifications,
+                "is_profile_public": teacher.is_profile_public,
+                "show_email_on_profile": teacher.show_email_on_profile
+            },
             "stats": {
                 "followers": followers_count,
                 "following": following_count,
@@ -48,29 +64,69 @@ class TeacherService:
     @staticmethod
     def get_dashboard_stats(teacher_id):
         try:
-            # Count the resources owned by this teacher
-            resources_count = ResourceCollection.query.filter_by(owner_id=teacher_id).count()
+            from models import ResourceCollection, Follower, ResourceLike
+            from datetime import datetime, timezone, timedelta
+            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+
+            # Resources counts
+            total_resources = ResourceCollection.query.filter_by(owner_id=teacher_id, is_hidden=False).count()
+            published_count = ResourceCollection.query.filter_by(owner_id=teacher_id, is_published=True, is_hidden=False).count()
+            draft_count = total_resources - published_count
             
-            # Count records where this teacher is being followed
+            # Weekly resource growth
+            weekly_resources = ResourceCollection.query.filter(
+                ResourceCollection.owner_id == teacher_id,
+                ResourceCollection.created_at >= seven_days_ago
+            ).count()
+
+            # Likes counts
+            total_likes = db.session.query(func.count(ResourceLike.like_id))\
+                .join(ResourceCollection, ResourceLike.collection_id == ResourceCollection.collection_id)\
+                .filter(ResourceCollection.owner_id == teacher_id).scalar() or 0
+            
+            weekly_likes = db.session.query(func.count(ResourceLike.like_id))\
+                .join(ResourceCollection, ResourceLike.collection_id == ResourceCollection.collection_id)\
+                .filter(ResourceCollection.owner_id == teacher_id)\
+                .filter(ResourceLike.created_at >= seven_days_ago).scalar() or 0
+
+            # Followers
             followers_count = Follower.query.filter_by(followed_id=teacher_id).count()
-            
-            # Count records where this teacher is the one doing the following
             following_count = Follower.query.filter_by(follower_id=teacher_id).count()
             
             return {
-                "total_resources": resources_count,
+                "total_resources": total_resources,
+                "published_count": published_count,
+                "draft_count": draft_count,
+                "weekly_resources": weekly_resources,
+                "total_likes": total_likes,
+                "weekly_likes": weekly_likes,
                 "followers_count": followers_count,
                 "following_count": following_count
             }
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             raise Exception(f"Failed to fetch dashboard stats: {str(e)}")
 
     @staticmethod
-    def get_all_profiles(current_user_id, page=1, per_page=20):
+    def get_all_profiles(current_user_id, page=1, per_page=20, search=None):
         from models import Subject, GradeLevel
         
+        query = Teacher.query.filter(Teacher.teacher_id != current_user_id)
+        
+        if search:
+            search_query = f"%{search}%"
+            query = query.filter(
+                or_(
+                    Teacher.username.ilike(search_query),
+                    Teacher.first_name.ilike(search_query),
+                    Teacher.last_name.ilike(search_query),
+                    Teacher.email.ilike(search_query)
+                )
+            )
+
         # Get all teachers except current one with pagination
-        pagination = Teacher.query.filter(Teacher.teacher_id != current_user_id).paginate(
+        pagination = query.paginate(
             page=page, per_page=per_page, error_out=False
         )
         teachers = pagination.items
@@ -168,6 +224,7 @@ class TeacherService:
             
             data.append({
                 "id": t_id,
+                "username": t.username,
                 "first_name": t.first_name,
                 "last_name": t.last_name,
                 "profile_image_url": t.profile_image_url,

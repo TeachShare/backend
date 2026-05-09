@@ -5,12 +5,14 @@ from models import VerificationCodes, db
 
 def send_verification_code(teacher):
     code = f"{secrets.randbelow(1000000):06d}"
+    token = secrets.token_urlsafe(32)
 
     hashed_code = generate_password_hash(code)
 
     new_code = VerificationCodes(
         user_id = teacher.teacher_id,
-        code_hash = hashed_code
+        code_hash = hashed_code,
+        token = token
     )
 
     db.session.add(new_code)

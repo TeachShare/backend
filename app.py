@@ -4,7 +4,7 @@ eventlet.monkey_patch()
 import os
 from dotenv import load_dotenv
 load_dotenv()
-
+from datetime import timedelta
 from flask import Flask
 from controller.v1 import v1_bp
 from extensions import jwt, oauth
@@ -18,6 +18,9 @@ from services.message_service import MessageService
 app = Flask(__name__)
 
 # CONFIGS
+IS_PRODUCTION = os.getenv("FLASK_ENV") == "production"
+CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:3000")
+
 app.config['GOOGLE_CLIENT_ID'] = os.getenv("GOOGLE_CLIENT_ID")
 app.config['GOOGLE_CLIENT_SECRET'] = os.getenv("GOOGLE_CLIENT_SECRET")
 app.secret_key = os.getenv("APP_SECRET_KEY", "dev-mode-fallback-only")
@@ -30,13 +33,23 @@ app.config['MAIL_PASSWORD'] = os.getenv("GOOGLE_EMAIL_PASSWORD")
 
 app.config['MAIL_DEFAULT_SENDER'] = os.getenv("GOOGLE_EMAIL")
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
+db_url = os.getenv("DATABASE_URL")
+if db_url:
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
-app.config["JWT_COOKIE_SECURE"] = False
-app.config["JWT_COOKIE_SAMESITE"] = "Lax"
+
+# PRODUCTION COOKIE SETTINGS
+app.config["JWT_COOKIE_SECURE"] = IS_PRODUCTION
+app.config["JWT_COOKIE_SAMESITE"] = "None" if IS_PRODUCTION else "Lax"
 app.config["JWT_COOKIE_CSRF_PROTECT"] = True
 app.config["JWT_ACCESS_CSRF_HEADER_NAME"] = "X-CSRF-TOKEN"
 
@@ -46,7 +59,7 @@ jwt.init_app(app)
 oauth.init_app(app)
 migrate = Migrate(app, db)
 mail = Mail(app)
-socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins=CORS_ORIGIN, async_mode='eventlet')
 
 # REGISTER GOOGLE
 google = oauth.register(
@@ -58,7 +71,7 @@ google = oauth.register(
 )
 
 # CORS
-CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
+CORS(app, supports_credentials=True, origins=[CORS_ORIGIN])
 
 # SOCKET IO HANDLERS
 @socketio.on('join')

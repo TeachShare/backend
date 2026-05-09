@@ -15,6 +15,15 @@ class ResourceCollection(db.Model):
     subject_id = db.Column(db.Integer, db.ForeignKey('subject.subject_id'), nullable=True)
     grade_level_id = db.Column(db.Integer, db.ForeignKey('grade_level.grade_level_id'), nullable=True)
     content_type_id = db.Column(db.Integer, db.ForeignKey('content_type.content_type_id'), nullable=True)
+    download_count = db.Column(db.Integer, default=0, nullable=False)
+    estimate_duration = db.Column(db.String(100), nullable=True)
+    student_summary = db.Column(db.Text, nullable=True)
+    
+    # Settings
+    allow_remixing = db.Column(db.Boolean, default=True, nullable=False)
+    visibility = db.Column(db.String(20), default='public', nullable=False) # 'public', 'private'
+    collaboration_mode = db.Column(db.String(20), default='none', nullable=False) # 'none', 'invite_only'
+    is_hidden = db.Column(db.Boolean, default=False, nullable=False)
 
     owner = db.relationship('Teacher', backref='resources')
     subject = db.relationship('Subject', backref='resources')

@@ -43,7 +43,7 @@ class CommunityService:
         
         pagination = CommunityPost.query.options(
             joinedload(CommunityPost.linked_resource)
-        ).order_by(CommunityPost.created_at.desc()).paginate(
+        ).filter(CommunityPost.is_hidden == False).order_by(CommunityPost.created_at.desc()).paginate(
             page=page, per_page=per_page, error_out=False
         )
         
@@ -68,6 +68,7 @@ class CommunityService:
                 "linked_resource": resource_data, 
                 "author": {
                     "id": author.teacher_id,
+                    "username": author.username,
                     "name": f"{author.first_name} {author.last_name}",
                     "avatar": author.profile_image_url
                 },
@@ -146,7 +147,7 @@ class CommunityService:
         if not post:
             return {"error": True, "message": "Post not found"}, 404
 
-        all_comments = PostComment.query.filter_by(post_id=post_id).order_by(PostComment.created_at.asc()).all()
+        all_comments = PostComment.query.filter_by(post_id=post_id, is_hidden=False).order_by(PostComment.created_at.asc()).all()
         
         return {"comments": CommunityService._build_comment_tree(all_comments)}, 200
 
@@ -163,6 +164,7 @@ class CommunityService:
                 "created_at": comment.created_at.isoformat(),
                 "author": {
                     "id": author.teacher_id,
+                    "username": author.username,
                     "name": f"{author.first_name} {author.last_name}",
                     "avatar": author.profile_image_url
                 },

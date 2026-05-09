@@ -11,3 +11,4 @@ class ResourceFile(db.Model):
     file_type = db.Column(db.String(100), nullable=True)  
     
     file_size = db.Column(db.Integer, nullable=True)
+    file_hash = db.Column(db.String(64), nullable=True, index=True)

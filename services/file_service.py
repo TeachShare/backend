@@ -3,6 +3,7 @@ from appwrite.services.storage import Storage
 from appwrite.input_file import InputFile
 from werkzeug.utils import secure_filename
 import os
+import hashlib
 
 class AppwriteService:
     def __init__(self):
@@ -14,12 +15,15 @@ class AppwriteService:
         self.storage = Storage(self.client)
         self.bucket_id = os.getenv("APPWRITE_BUCKET_ID")
 
+    def calculate_hash(self, file_bytes):
+        return hashlib.sha256(file_bytes).hexdigest()
+
     def upload_file(self, file_storage_obj):
         filename = secure_filename(file_storage_obj.filename)
         mime_type = file_storage_obj.content_type
 
         file_bytes = file_storage_obj.read()
-
+        file_hash = self.calculate_hash(file_bytes)
         file_size = len(file_bytes)
 
         result = self.storage.create_file(
@@ -40,10 +44,12 @@ class AppwriteService:
             "url": file_url,
             "name": filename,
             "type": mime_type,
-            "size": file_size
+            "size": file_size,
+            "hash": file_hash
         }
 
     def upload_bytes(self, file_bytes, filename, mime_type):
+        file_hash = self.calculate_hash(file_bytes)
         file_size = len(file_bytes)
 
         result = self.storage.create_file(
@@ -64,5 +70,6 @@ class AppwriteService:
             "url": file_url,
             "name": filename,
             "type": mime_type,
-            "size": file_size
+            "size": file_size,
+            "hash": file_hash
         }

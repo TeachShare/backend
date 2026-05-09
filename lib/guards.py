@@ -20,7 +20,34 @@ def verification_required(fn):
                 "verified": False,
             }), 403
         
+        if teacher.is_suspended:
+            return jsonify({
+                "error": "Account Suspended",
+                "message": "This account has been suspended by an administrator for violating community standards.",
+                "suspended": True,
+            }), 403
+        
    
+        return fn(teacher, *args, **kwargs)
+    
+    return decorated_function
+
+def admin_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def decorated_function(*args, **kwargs):
+        teacher_id = get_jwt_identity()
+        teacher = Teacher.query.get(teacher_id)
+
+        if not teacher:
+            return jsonify({"error": "User not found"}), 404
+        
+        if not teacher.is_admin:
+            return jsonify({
+                "error": "Access Denied",
+                "message": "Administrator privileges required."
+            }), 403
+        
         return fn(teacher, *args, **kwargs)
     
     return decorated_function

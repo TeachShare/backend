@@ -17,6 +17,7 @@ class ResourceVersion(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey('teachers.teacher_id'), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    creator = db.relationship('Teacher', foreign_keys=[created_by])
     files = db.relationship('ResourceFile', backref='version', lazy=True, cascade="all, delete-orphan")
     
     parent_version = db.relationship('ResourceVersion', remote_side=[version_id], backref='remixes')

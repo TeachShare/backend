@@ -1,10 +1,27 @@
-from models import ResourceCollection, ResourceVersion, ResourceFile, ResourceTag, Tag, TagType, Subject, ContentType, GradeLevel, db, ResourceComment, ResourceRating, ResourceLike
-from datetime import datetime, timezone
+from models import Teacher, ResourceCollection, ResourceVersion, ResourceFile, ResourceTag, Tag, TagType, Subject, ContentType, GradeLevel, db, ResourceComment, ResourceRating, ResourceLike, ResourceCollaborator, FileSignature
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import joinedload
-from sqlalchemy import or_, cast, String
+from sqlalchemy import or_, and_, cast, String
 from sqlalchemy.sql import func
 
 class ResourceCollectionService:
+    @staticmethod
+    def get_file_by_hash(file_hash):
+        return FileSignature.query.filter_by(file_hash=file_hash).first()
+
+    @staticmethod
+    def has_edit_permission(collection_id, teacher_id):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection: return False
+        if collection.owner_id == teacher_id: return True
+        
+        collaborator = ResourceCollaborator.query.filter_by(
+            collection_id=collection_id, 
+            teacher_id=teacher_id, 
+            role='editor'
+        ).first()
+        return collaborator is not None
+
     @staticmethod
     def create_resource(data):
         is_published = data.get('is_published', False)
@@ -16,6 +33,10 @@ class ResourceCollectionService:
         for field in required_fields:
             if not data.get(field):
                 raise ValueError(f"Missing required field: '{field}'")
+        
+        estimate_duration = data.get('estimate_duration')
+        if estimate_duration and len(str(estimate_duration)) > 100:
+            raise ValueError("Estimate duration must be less than 100 characters")
             
         try:
             # 1. Create the parent Collection
@@ -27,6 +48,11 @@ class ResourceCollectionService:
                 subject_id = data.get('subject_id'),
                 grade_level_id = data.get('grade_level_id'),
                 content_type_id = data.get('content_type_id'),
+                estimate_duration = estimate_duration,
+                student_summary = data.get('student_summary'),
+                allow_remixing = data.get('allow_remixing', True),
+                visibility = data.get('visibility', 'public'),
+                collaboration_mode = data.get('collaboration_mode', 'none'),
                 updated_at = datetime.now(timezone.utc)
             )
 
@@ -54,7 +80,8 @@ class ResourceCollectionService:
                     file_url = file_info.get('url'),
                     file_name = file_info.get('name'),
                     file_type = file_info.get('type'),
-                    file_size = file_info.get('size')
+                    file_size = file_info.get('size'),
+                    file_hash = file_info.get('hash')
                 )
                 db.session.add(new_file)
 
@@ -76,7 +103,29 @@ class ResourceCollectionService:
                 
                 db.session.add(ResourceTag(collection_id=new_collection.collection_id, tag_id=existing_tag.tag_id))
             
+            # 5. Handle Collaborators
+            for coll_data in data.get('collaborators', []):
+                # Ensure the collaborator is not the owner
+                if coll_data.get('teacher_id') == new_collection.owner_id:
+                    continue
+                
+                new_collaborator = ResourceCollaborator(
+                    collection_id=new_collection.collection_id,
+                    teacher_id=coll_data.get('teacher_id'),
+                    role=coll_data.get('role', 'editor')
+                )
+                db.session.add(new_collaborator)
+
             db.session.commit()
+
+            # Log Activity
+            from services.activity_service import ActivityService
+            ActivityService.log_activity(
+                user_id=new_collection.owner_id,
+                activity_type='post_resource',
+                collection_id=new_collection.collection_id
+            )
+
             return new_collection
 
         except Exception as e:
@@ -84,21 +133,41 @@ class ResourceCollectionService:
             raise e
 
     @staticmethod
-    def get_my_resources(teacher_id, filters=None, page=1, per_page=12):
+    def get_my_resources(teacher_id, filters=None, page=1, per_page=12, sort_by='newest'):
+        # Weekly Deltas (last 7 days)
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
         
+        # Subqueries for counts
+        likes_sub = db.session.query(
+            ResourceLike.collection_id, 
+            func.count(ResourceLike.like_id).label('total_likes')
+        ).group_by(ResourceLike.collection_id).subquery()
+
+        weekly_likes_sub = db.session.query(
+            ResourceLike.collection_id, 
+            func.count(ResourceLike.like_id).label('weekly_likes')
+        ).filter(ResourceLike.created_at >= seven_days_ago).group_by(ResourceLike.collection_id).subquery()
+
+        # Query
         query = db.session.query(
             ResourceCollection,
-            func.count(ResourceLike.collection_id).label('total_likes')
+            func.coalesce(likes_sub.c.total_likes, 0).label('likes'),
+            func.coalesce(weekly_likes_sub.c.weekly_likes, 0).label('weekly_likes')
         )\
-        .outerjoin(ResourceLike, ResourceCollection.collection_id == ResourceLike.collection_id)\
-        .outerjoin(Subject, ResourceCollection.subject_id == Subject.subject_id)\
-        .outerjoin(GradeLevel, ResourceCollection.grade_level_id == GradeLevel.grade_level_id)\
-        .outerjoin(ContentType, ResourceCollection.content_type_id == ContentType.content_type_id)\
-        .join(ResourceVersion, ResourceCollection.collection_id == ResourceVersion.collection_id)\
-        .filter(ResourceCollection.owner_id == teacher_id)\
-        .filter(ResourceVersion.is_latest == True)\
-        .group_by(ResourceCollection.collection_id)
-        
+        .options(joinedload(ResourceCollection.subject), 
+                 joinedload(ResourceCollection.grade_level),
+                 joinedload(ResourceCollection.content_type),
+                 joinedload(ResourceCollection.collaborators))\
+        .outerjoin(likes_sub, ResourceCollection.collection_id == likes_sub.c.collection_id)\
+        .outerjoin(weekly_likes_sub, ResourceCollection.collection_id == weekly_likes_sub.c.collection_id)\
+        .filter(
+            or_(
+                ResourceCollection.owner_id == teacher_id,
+                ResourceCollection.collaborators.any(teacher_id=teacher_id)
+            )
+        )\
+        .filter(ResourceCollection.is_hidden == False)
+
         if filters:
             if filters.get('search'):
                 search_query = f"%{filters['search']}%"
@@ -121,30 +190,40 @@ class ResourceCollectionService:
                 query = query.filter(ResourceCollection.is_published == True)
             elif status == 'draft':
                 query = query.filter(ResourceCollection.is_published == False)
-                
-        query = query.order_by(ResourceCollection.updated_at.desc())
+
+        # Sorting
+        if sort_by == 'downloads':
+            query = query.order_by(ResourceCollection.download_count.desc())
+        elif sort_by == 'likes':
+            query = query.order_by(db.text('likes DESC'))
+        elif sort_by == 'alphabetical':
+            query = query.order_by(ResourceCollection.title.asc())
+        else: # newest
+            query = query.order_by(ResourceCollection.updated_at.desc())
 
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
         results = []
-
-        for col, total_likes in pagination.items:
-            # Safer tag fetching to prevent loop crashes
+        for col, total_likes, weekly_likes in pagination.items:
+            # Safer tag fetching
             tag_names = [rt.tag.tag_name for rt in col.tags if rt.tag] if hasattr(col, 'tags') else []
             
             results.append({
                 "collection_id": col.collection_id,
                 "title": col.title or "Untitled",
-                "description": col.description if isinstance(col.description, str) else str(col.description or ""),
                 "is_published": col.is_published,
                 "category": col.subject.subject_name if col.subject else "No Subject",
                 "type": col.content_type.type_name if col.content_type else "No Type",
                 "grade": col.grade_level.grade_name if col.grade_level else "No Grade",
                 "tags": tag_names, 
-                "likes": total_likes,  
-                "downloads": 0,      
-                "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat()
+                "likes": total_likes,
+                "weekly_likes": weekly_likes,
+                "downloads": col.download_count,      
+                "visibility": col.visibility,
+                "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat(),
+                "is_collaborator": any(c.teacher_id == teacher_id for c in col.collaborators) if hasattr(col, 'collaborators') else False
             })
-        
+
         return {
             "resources": results,
             "total_pages": pagination.pages,
@@ -153,24 +232,48 @@ class ResourceCollectionService:
             "total_count": pagination.total
         }
     @staticmethod
-    def get_resource_by_id(collection_id, current_user_id=None):
+    def get_resource_by_id(collection_id, current_user_id=None, version_no=None):
         collection = ResourceCollection.query.get(collection_id)
         if not collection: return None
 
-        latest_version = ResourceVersion.query.filter_by(collection_id=collection_id, is_latest=True).first()
-        if not latest_version:
-            latest_version = ResourceVersion.query.filter_by(collection_id=collection_id)\
-                .order_by(ResourceVersion.version_no.desc()).first()
+        # Access Control for Private Resources
+        if collection.visibility == 'private':
+            if not current_user_id:
+                return None # Or raise ValueError("Private resource")
+            
+            is_owner = collection.owner_id == current_user_id
+            is_collab = ResourceCollaborator.query.filter_by(
+                collection_id=collection_id, 
+                teacher_id=current_user_id
+            ).first() is not None
+            
+            if not is_owner and not is_collab:
+                return None
+
+        if version_no:
+            # Find the version within the same lineage (matching title and owner)
+            target_version = db.session.query(ResourceVersion)\
+                .join(ResourceCollection, ResourceVersion.collection_id == ResourceCollection.collection_id)\
+                .filter(ResourceCollection.owner_id == collection.owner_id)\
+                .filter(ResourceCollection.title == collection.title)\
+                .filter(ResourceVersion.version_no == version_no)\
+                .first()
+        else:
+            target_version = ResourceVersion.query.filter_by(collection_id=collection_id, is_latest=True).first()
+            if not target_version:
+                target_version = ResourceVersion.query.filter_by(collection_id=collection_id)\
+                    .order_by(ResourceVersion.version_no.desc()).first()
 
         files_data = []
-        if latest_version:
-            files = ResourceFile.query.filter_by(version_id=latest_version.version_id).all()
+        if target_version:
+            files = ResourceFile.query.filter_by(version_id=target_version.version_id).all()
             files_data = [{
                 "file_id": f.file_id, 
                 "name": f.file_name, 
                 "url": f.file_url, 
                 "type": f.file_type, 
-                "size": f.file_size
+                "size": f.file_size,
+                "hash": f.file_hash
             } for f in files]
 
         tag_names = [t.tag_name for t in db.session.query(Tag.tag_name)\
@@ -181,6 +284,7 @@ class ResourceCollectionService:
             .outerjoin(ResourceRating, (ResourceRating.teacher_id == ResourceComment.teacher_id) & 
                                     (ResourceRating.collection_id == ResourceComment.collection_id))\
             .filter(ResourceComment.collection_id == collection_id)\
+            .filter(ResourceComment.is_hidden == False)\
             .order_by(ResourceComment.created_at.desc()).all()
         
         user_has_liked = False
@@ -206,13 +310,21 @@ class ResourceCollectionService:
         
         likes_count = ResourceLike.query.filter_by(collection_id=collection_id).count()
 
-        downloads_count = getattr(collection, 'downloads_count', 0) or 0
+        download_count = collection.download_count
         remixes_count = getattr(collection, 'remixes_count', 0) or 0
+        
+        collaborators = [{
+            "teacher_id": c.teacher_id,
+            "username": c.teacher.username,
+            "name": f"{c.teacher.first_name} {c.teacher.last_name}",
+            "role": c.role
+        } for c in collection.collaborators]
 
         return {
             "collection_id": collection.collection_id,
             "owner_id": collection.owner_id,
             "owner_name": f"{collection.owner.first_name} {collection.owner.last_name}" if collection.owner else "Unknown",
+            "owner_username": collection.owner.username if collection.owner else None,
             "title": collection.title,
             "description": collection.description,
             "subject": collection.subject.subject_name if collection.subject else "General",
@@ -227,11 +339,21 @@ class ResourceCollectionService:
             "avg_rating": avg_rating,
             "likes": likes_count,
             "user_has_liked": user_has_liked,
-            "downloads": downloads_count,
+            "downloads": download_count,
             "remixes": remixes_count,
+            "estimate_duration": collection.estimate_duration,
+            "student_summary": collection.student_summary,
             "is_published": collection.is_published,
-            "version_no": latest_version.version_no if latest_version else 1,
-            "updated_at": collection.updated_at.isoformat()
+            "version_no": target_version.version_no if target_version else 1,
+            "is_latest": target_version.is_latest if target_version else True,
+            "version_notes": target_version.notes if target_version else None,
+            "version_creator_name": f"{target_version.creator.first_name} {target_version.creator.last_name}" if target_version and target_version.creator else None,
+            "updated_at": collection.updated_at.isoformat(),
+            # Settings
+            "allow_remixing": collection.allow_remixing,
+            "visibility": collection.visibility,
+            "collaboration_mode": collection.collaboration_mode,
+            "collaborators": collaborators
         }
     
     @staticmethod
@@ -255,16 +377,39 @@ class ResourceCollectionService:
         return {"message": f"Successfully restored to version {target_version.version_no}"}
 
     @staticmethod
-    def update_resource(old_collection_id, data, new_files_info=None):
+    def update_resource(old_collection_id, data, new_files_info=None, updater_id=None):
         collection = ResourceCollection.query.get(old_collection_id)
 
         if not collection:
             raise ValueError("Collection not found")
+        
+        # Permission check
+        if updater_id and not ResourceCollectionService.has_edit_permission(old_collection_id, updater_id):
+            raise ValueError("Unauthorized to update this resource")
+        
+        estimate_duration = data.get('estimate_duration')
+        if estimate_duration and len(str(estimate_duration)) > 100:
+            raise ValueError("Estimate duration must be less than 100 characters")
+
         collection.is_published = data.get('is_published', collection.is_published)
         collection.title = data.get('title', collection.title)
         collection.description = data.get('description', collection.description)
         collection.subject_id = data.get('subject_id', collection.subject_id)
         collection.grade_level_id = data.get('grade_level_id', collection.grade_level_id)
+        collection.estimate_duration = estimate_duration if estimate_duration is not None else collection.estimate_duration
+        collection.student_summary = data.get('student_summary', collection.student_summary)
+        
+        # Update settings
+        collection.allow_remixing = data.get('allow_remixing', collection.allow_remixing)
+        
+        # OWNER-ONLY SETTINGS
+        if updater_id and collection.owner_id == updater_id:
+            collection.visibility = data.get('visibility', collection.visibility)
+            collection.collaboration_mode = data.get('collaboration_mode', collection.collaboration_mode)
+        elif not updater_id:
+            # Internal server calls with no updater_id (e.g. initial creation logic if reused)
+            collection.visibility = data.get('visibility', collection.visibility)
+            collection.collaboration_mode = data.get('collaboration_mode', collection.collaboration_mode)
 
         collection.updated_at = datetime.now(timezone.utc)
         
@@ -282,22 +427,27 @@ class ResourceCollectionService:
             is_latest = True,
             is_remix = False,
             parent_version_id = last_v.version_id if last_v else None,
-            created_by = collection.owner_id
+            created_by = updater_id if updater_id else collection.owner_id
         )
         
         db.session.add(new_version)
         db.session.flush()
 
-        # 1. Always retain files from the previous version
+        # 1. Retain files from the previous version, excluding those marked for removal
         if last_v:
+            removed_file_urls = data.get('removed_file_urls', [])
             old_files = ResourceFile.query.filter_by(version_id=last_v.version_id).all()
             for old_f in old_files:
+                if old_f.file_url in removed_file_urls:
+                    continue
+                    
                 db.session.add(ResourceFile(
                     version_id=new_version.version_id,
                     file_url=old_f.file_url,
                     file_name=old_f.file_name,
                     file_type=old_f.file_type,
-                    file_size=old_f.file_size
+                    file_size=old_f.file_size,
+                    file_hash=old_f.file_hash
                 ))
 
         # 2. Append new files if they are provided
@@ -308,7 +458,8 @@ class ResourceCollectionService:
                     file_url=f.get('url'),
                     file_name=f.get('name'),
                     file_type=f.get('type'),
-                    file_size=f.get('size')
+                    file_size=f.get('size'),
+                    file_hash=f.get('hash')
                 ))
                 
         ResourceTag.query.filter_by(collection_id=old_collection_id).delete()
@@ -326,6 +477,15 @@ class ResourceCollectionService:
                 db.session.add(ResourceTag(collection_id=old_collection_id, tag_id=existing_tag.tag_id))
 
         db.session.commit()
+
+        # Log Activity
+        from services.activity_service import ActivityService
+        ActivityService.log_activity(
+            user_id=collection.owner_id,
+            activity_type='update_resource',
+            collection_id=collection.collection_id
+        )
+
         return collection
 
     @staticmethod
@@ -357,14 +517,46 @@ class ResourceCollectionService:
 
 
     @staticmethod
-    def get_discover_resources(current_teacher_id, filters=None, page=1, per_page=12):
+    def get_discover_resources(current_teacher_id, filters=None, page=1, per_page=12, include_own=False):
+        # Weekly Deltas (last 7 days)
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        
+        # Subquery for weekly likes growth
+        weekly_likes_sub = db.session.query(
+            ResourceLike.collection_id, 
+            func.count(ResourceLike.like_id).label('weekly_likes')
+        ).filter(ResourceLike.created_at >= seven_days_ago).group_by(ResourceLike.collection_id).subquery()
+
         # Main query for the collections
-        query = db.session.query(ResourceCollection)\
-            .options(joinedload(ResourceCollection.subject),
-                    joinedload(ResourceCollection.grade_level),
-                    joinedload(ResourceCollection.content_type))\
-            .filter(ResourceCollection.owner_id != current_teacher_id)\
-            .filter(ResourceCollection.is_published == True)
+        query = db.session.query(
+            ResourceCollection,
+            func.coalesce(weekly_likes_sub.c.weekly_likes, 0).label('weekly_likes')
+        )\
+        .join(Teacher, ResourceCollection.owner_id == Teacher.teacher_id)\
+        .options(joinedload(ResourceCollection.subject),
+                joinedload(ResourceCollection.grade_level),
+                joinedload(ResourceCollection.content_type))\
+        .outerjoin(weekly_likes_sub, ResourceCollection.collection_id == weekly_likes_sub.c.collection_id)
+        
+        if include_own:
+            # For global search: Own resources (any visibility) OR others' public resources
+            query = query.filter(
+                or_(
+                    ResourceCollection.owner_id == current_teacher_id,
+                    and_(
+                        ResourceCollection.owner_id != current_teacher_id,
+                        ResourceCollection.is_published == True,
+                        ResourceCollection.visibility == 'public',
+                        ResourceCollection.is_hidden == False
+                    )
+                )
+            )
+        else:
+            # For discovery: Only others' public resources
+            query = query.filter(ResourceCollection.owner_id != current_teacher_id)\
+                .filter(ResourceCollection.is_published == True)\
+                .filter(ResourceCollection.visibility == 'public')\
+                .filter(ResourceCollection.is_hidden == False)
         
         if filters:
             if filters.get('search'):
@@ -382,14 +574,22 @@ class ResourceCollectionService:
                 query = query.filter(ResourceCollection.grade_level_id == filters['grade_level_id'])
             if filters.get('content_type_id'):
                 query = query.filter(ResourceCollection.content_type_id == filters['content_type_id'])
+            
+            if filters.get('verified_only'):
+                query = query.filter(Teacher.is_verified == True)
 
-        query = query.order_by(ResourceCollection.updated_at.desc())
+        # Sorting
+        sort_by = filters.get('sort_by', 'newest') if filters else 'newest'
+        if sort_by == 'trending':
+            query = query.order_by(db.text('weekly_likes DESC'), ResourceCollection.updated_at.desc())
+        else: # newest
+            query = query.order_by(ResourceCollection.updated_at.desc())
         
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         results = []
         
-        for collection in pagination.items:
-            # Manual fetch for the latest version since 'versions' relationship isn't set
+        for collection, weekly_likes in pagination.items:
+            # Manual fetch for the latest version
             latest_v = ResourceVersion.query.filter_by(
                 collection_id=collection.collection_id, 
                 is_latest=True
@@ -404,13 +604,21 @@ class ResourceCollectionService:
 
             results.append({
                 "collection_id": collection.collection_id,
+                "owner_id": collection.owner_id,
                 "title": collection.title,
                 "owner_name": f"{collection.owner.first_name} {collection.owner.last_name}" if collection.owner else "Unknown",
+                "owner_username": collection.owner.username if collection.owner else None,
+                "owner_is_verified": collection.owner.is_verified if collection.owner else False,
+                "description": collection.description if isinstance(collection.description, str) else str(collection.description or ""),
                 "subject": collection.subject.subject_name if collection.subject else "General",
                 "grade": collection.grade_level.grade_name if collection.grade_level else "All Grades",
                 "type": collection.content_type.type_name if collection.content_type else "Resource",
                 "tags": tag_names, 
                 "file_count": file_count,
+                "downloads": collection.download_count,
+                "weekly_likes": weekly_likes,
+                "estimate_duration": collection.estimate_duration,
+                "allow_remixing": collection.allow_remixing,
                 "version_no": latest_v.version_no if latest_v else 1,
                 "updated_at": collection.updated_at.isoformat()
             })
@@ -433,6 +641,9 @@ class ResourceCollectionService:
         original_collection = ResourceCollection.query.get(original_collection_id)
         if not original_collection:
             raise ValueError("Original resource not found")
+        
+        if not original_collection.allow_remixing:
+            raise ValueError("Remixing is disabled for this resource")
 
         original_version = ResourceVersion.query.filter_by(
             collection_id=original_collection_id, 
@@ -477,7 +688,8 @@ class ResourceCollectionService:
                         file_url=f.file_url,
                         file_name=f.file_name,
                         file_type=f.file_type,
-                        file_size=f.file_size
+                        file_size=f.file_size,
+                        file_hash=f.file_hash
                     ))
 
             # 5. Clone Tags
@@ -489,6 +701,26 @@ class ResourceCollectionService:
                 ))
 
             db.session.commit()
+
+            # Trigger Notification for remix
+            from services.notification_service import NotificationService
+            NotificationService.create_notification(
+                recipient_id=original_collection.owner_id,
+                notification_type='remix',
+                sender_id=new_owner_id,
+                collection_id=original_collection_id,
+                extra_data={"remixed_collection_id": remixed_collection.collection_id}
+            )
+
+            # Log Activity
+            from services.activity_service import ActivityService
+            ActivityService.log_activity(
+                user_id=new_owner_id,
+                activity_type='remix_resource',
+                collection_id=original_collection_id,
+                extra_data={"remixed_collection_id": remixed_collection.collection_id}
+            )
+
             return remixed_collection
 
         except Exception as e:
@@ -531,5 +763,91 @@ class ResourceCollectionService:
         except Exception as e:
             db.session.rollback()
             raise e
+    
+    @staticmethod
+    def add_collaborator(collection_id, teacher_id, role='editor', owner_id=None):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection:
+            raise ValueError("Resource not found")
+        
+        if collection.collaboration_mode == 'none':
+            raise ValueError("Collaboration is disabled for this resource")
+        
+        if owner_id and collection.owner_id != owner_id:
+            raise ValueError("Only the owner can add collaborators")
+        
+        if collection.owner_id == teacher_id:
+            raise ValueError("Owner cannot be a collaborator")
+        
+        existing = ResourceCollaborator.query.filter_by(
+            collection_id=collection_id, 
+            teacher_id=teacher_id
+        ).first()
+        
+        if existing:
+            raise ValueError("User is already a collaborator")
+        
+        new_collab = ResourceCollaborator(
+            collection_id=collection_id,
+            teacher_id=teacher_id,
+            role=role
+        )
+        db.session.add(new_collab)
+        db.session.commit()
+        
+        # Trigger notification
+        from services.notification_service import NotificationService
+        NotificationService.create_notification(
+            recipient_id=teacher_id,
+            notification_type='collaborator_added',
+            sender_id=owner_id,
+            collection_id=collection_id,
+            extra_data={"role": role}
+        )
+        
+        return new_collab
+
+    @staticmethod
+    def remove_collaborator(collection_id, teacher_id, owner_id=None):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection:
+            raise ValueError("Resource not found")
+        
+        # Only owner can remove others, but a collaborator can remove themselves
+        if owner_id and collection.owner_id != owner_id and teacher_id != owner_id:
+            raise ValueError("Unauthorized to remove collaborator")
+            
+        collaborator = ResourceCollaborator.query.filter_by(
+            collection_id=collection_id, 
+            teacher_id=teacher_id
+        ).first()
+        
+        if not collaborator:
+            raise ValueError("Collaborator not found")
+            
+        db.session.delete(collaborator)
+        db.session.commit()
+        return True
+
+    @staticmethod
+    def update_collaborator_role(collection_id, teacher_id, new_role, owner_id=None):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection:
+            raise ValueError("Resource not found")
+        
+        if owner_id and collection.owner_id != owner_id:
+            raise ValueError("Only the owner can update roles")
+            
+        collaborator = ResourceCollaborator.query.filter_by(
+            collection_id=collection_id, 
+            teacher_id=teacher_id
+        ).first()
+        
+        if not collaborator:
+            raise ValueError("Collaborator not found")
+            
+        collaborator.role = new_role
+        db.session.commit()
+        return collaborator
         
         
