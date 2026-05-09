@@ -113,8 +113,7 @@ def google_login():
 
 @auth_bp.route('/callback/google')
 def google_callback():
-    # Remove the redirect_uri argument here. 
-    # Authlib automatically handles the request context.
+    # Authlib automatically retrieves the state and redirect_uri from the session
     token = oauth.google.authorize_access_token()
     user_info = token.get('userinfo')
 

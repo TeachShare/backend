@@ -14,16 +14,21 @@ from flask_migrate import Migrate
 from flask_mailman import Mail
 from flask_socketio import SocketIO, emit, join_room
 from services.message_service import MessageService
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+# Apply ProxyFix middleware to handle headers from reverse proxies (mandatory for Render/Vercel connectivity)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # CONFIGS
 IS_PRODUCTION = os.getenv("FLASK_ENV") == "production"
 CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:3000")
 
+# Use 'SECRET_KEY' in app.config for consistent session encryption
+app.config['SECRET_KEY'] = os.getenv("APP_SECRET_KEY", "dev-mode-fallback-only")
 app.config['GOOGLE_CLIENT_ID'] = os.getenv("GOOGLE_CLIENT_ID")
 app.config['GOOGLE_CLIENT_SECRET'] = os.getenv("GOOGLE_CLIENT_SECRET")
-app.secret_key = os.getenv("APP_SECRET_KEY", "dev-mode-fallback-only")
+# app.secret_key is also set by config['SECRET_KEY'] automatically
 
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
@@ -52,6 +57,13 @@ app.config["JWT_COOKIE_SECURE"] = IS_PRODUCTION
 app.config["JWT_COOKIE_SAMESITE"] = "None" if IS_PRODUCTION else "Lax"
 app.config["JWT_COOKIE_CSRF_PROTECT"] = True
 app.config["JWT_ACCESS_CSRF_HEADER_NAME"] = "X-CSRF-TOKEN"
+
+# SESSION COOKIE SETTINGS (Used by Authlib for OAuth State)
+app.config["SESSION_COOKIE_NAME"] = "teachshare_session"
+app.config["SESSION_COOKIE_SECURE"] = IS_PRODUCTION
+app.config["SESSION_COOKIE_SAMESITE"] = "None" if IS_PRODUCTION else "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_DOMAIN"] = None  # Prevents domain-locking issues on localhost/subdomains
 
 # INIT EXTENSIONS
 db.init_app(app)
