@@ -108,25 +108,30 @@ class AuthService:
 
         found_teacher = Teacher.query.filter_by(email=email).first()
         if not found_teacher:
-            return {"success": False, "message": "Email not found!"}
+            print(f"DEBUG LOGIN: Email {email} not found")
+            return {"success": False, "message": "Email not found!"}, None
         
         if found_teacher.auth:
-            if found_teacher.auth.auth_provider != 'local':
+            if found_teacher.auth.auth_provider != 'local' or not found_teacher.auth.hashed_password:
+                 print(f"DEBUG LOGIN: User {email} uses {found_teacher.auth.auth_provider}")
                  return {"success": False, "message": f"This account uses {found_teacher.auth.auth_provider.capitalize()} Login."}, None
 
             if check_password_hash(found_teacher.auth.hashed_password, password):
                 # Check verification status with Supabase if not already verified locally
                 if not found_teacher.is_verified and supabase:
                     try:
+                        print(f"DEBUG LOGIN: Checking Supabase status for {email}")
                         # Attempt to sign in to Supabase to check status
                         sb_auth = supabase.auth.sign_in_with_password({
                             "email": email, 
                             "password": password
                         })
                         if sb_auth.user.email_confirmed_at:
+                            print(f"DEBUG LOGIN: Syncing verification for {email}")
                             found_teacher.is_verified = True
                             db.session.commit()
-                    except:
+                    except Exception as e:
+                        print(f"DEBUG LOGIN SUPABASE ERROR: {e}")
                         pass # User might not be confirmed in SB yet
 
                 access_token = create_access_token(identity=str(found_teacher.teacher_id))
@@ -143,6 +148,11 @@ class AuthService:
                     "is_suspended": found_teacher.is_suspended,
                     "verification_token": "supabase_managed" if not found_teacher.is_verified else None
                 }, access_token
+            else:
+                print(f"DEBUG LOGIN: Password mismatch for {email}")
+        else:
+            print(f"DEBUG LOGIN: No auth record for {email}")
+            return {"success": False, "message": "This account uses Google Login."}, None
         
         return {"success": False, "message": "Invalid email or password"}, None
     
