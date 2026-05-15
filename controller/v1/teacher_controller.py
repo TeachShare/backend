@@ -4,7 +4,7 @@ from services.follow_service import FollowService
 from services.teacher_service import TeacherService
 from lib.guards import verification_required 
 from flask_jwt_extended import get_jwt_identity
-from models  import db, Teacher
+from models  import db, Teacher, ResourceCollection, Quiz, QuizAttempt, ResourceLike, PostLike, ResourceComment, PostComment, UserActivity
 import traceback
 
 teacher_bp = Blueprint('teacher_controller', __name__)
@@ -171,3 +171,61 @@ def get_teacher_activity(current_teacher, teacher_id):
         }), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+@teacher_bp.route('/archive', methods=['POST'])
+@verification_required
+def archive_account(current_teacher):
+    try:
+        current_teacher.is_archived = True
+        current_teacher.is_profile_public = False
+
+        # Hide resources
+        ResourceCollection.query.filter_by(owner_id=current_teacher.teacher_id).update({"visibility": "private"})
+
+        db.session.commit()
+        return jsonify({"success": True, "message": "Account archived successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+@teacher_bp.route('/restore', methods=['POST'])
+@verification_required
+def restore_account(current_teacher):
+    try:
+        current_teacher.is_archived = False
+        db.session.commit()
+        return jsonify({"success": True, "message": "Account restored successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@teacher_bp.route('/delete', methods=['DELETE'])
+@verification_required
+def delete_account(current_teacher):
+    try:
+        # 1. Clean up community interactions
+        ResourceLike.query.filter_by(teacher_id=current_teacher.teacher_id).delete()
+        PostLike.query.filter_by(teacher_id=current_teacher.teacher_id).delete()
+        ResourceComment.query.filter_by(teacher_id=current_teacher.teacher_id).delete()
+        PostComment.query.filter_by(teacher_id=current_teacher.teacher_id).delete()
+        UserActivity.query.filter_by(teacher_id=current_teacher.teacher_id).delete()
+
+        # 2. Delete Quizzes owned by user
+        quizzes = Quiz.query.filter_by(teacher_id=current_teacher.teacher_id).all()
+        for q in quizzes:
+            db.session.delete(q)
+
+        # 3. Delete Resources owned by user
+        resources = ResourceCollection.query.filter_by(owner_id=current_teacher.teacher_id).all()
+        for r in resources:
+            db.session.delete(r)
+
+        # Delete the teacher
+        db.session.delete(current_teacher)
+        db.session.commit()
+
+        return jsonify({"success": True, "message": "Account deleted permanently"}), 200
+    except Exception as e:
+        db.session.rollback()
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+

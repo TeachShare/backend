@@ -382,8 +382,11 @@ def remix_resource_route(current_teacher, collection_id):
             "message": "Resource remixed successfully",
             "collection_id": new_resource.collection_id
         }), 201
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        traceback.print_exc()
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @resource_collection_bp.route('/<int:collection_id>', methods=['DELETE'])

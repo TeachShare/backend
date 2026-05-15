@@ -8,6 +8,7 @@ from .message_controller import message_bp
 from .ai_controller import ai_bp
 from .notification_controller import notification_bp
 from .moderation_controller import moderation_bp
+from .quiz_controller import quiz_bp
 
 v1_bp = Blueprint('v1', __name__)
 
@@ -22,3 +23,4 @@ v1_bp.register_blueprint(message_bp, url_prefix='/messages')
 v1_bp.register_blueprint(ai_bp, url_prefix='/ai')
 v1_bp.register_blueprint(notification_bp, url_prefix='/notifications')
 v1_bp.register_blueprint(moderation_bp, url_prefix='/moderation')
+v1_bp.register_blueprint(quiz_bp, url_prefix='/quizzes')

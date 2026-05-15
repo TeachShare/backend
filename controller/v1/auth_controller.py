@@ -108,7 +108,8 @@ def get_current_user():
         "bio": teacher.bio,
         "auth_provider": teacher.auth.auth_provider if teacher.auth else "local",
         "is_verified": teacher.is_verified,
-        "is_admin": teacher.is_admin
+        "is_admin": teacher.is_admin,
+        "is_archived": teacher.is_archived
     }
 
     return jsonify(response_data), 200

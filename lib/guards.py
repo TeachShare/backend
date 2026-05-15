@@ -27,6 +27,15 @@ def verification_required(fn):
                 "suspended": True,
             }), 403
         
+        # Check if archived - Allow only to /restore endpoint
+        from flask import request
+        if teacher.is_archived and request.path != '/api/v1/teachers/restore':
+            return jsonify({
+                "error": "Account Archived",
+                "message": "Your account is currently archived. Restore it to access all features.",
+                "archived": True,
+            }), 403
+        
    
         return fn(teacher, *args, **kwargs)
     

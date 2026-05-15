@@ -6,6 +6,7 @@ from services.text_extraction_service import TextExtractionService
 from lib.guards import verification_required
 from models import db, AIGeneratedContent, Subject, GradeLevel, ContentType
 import datetime
+import os
 
 ai_bp = Blueprint('ai_controller', __name__)
 ai_service = AIService()
@@ -23,46 +24,76 @@ def analyze_document(current_teacher):
             files = [request.files['file']]
 
         if not files:
+            print("DEBUG: 400 Error - No files found in request.files")
             return jsonify({"error": True, "message": "No files uploaded"}), 400
         
-        combined_text = ""
+        MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB
+        files_content = []
+        
+        print(f"DEBUG: Processing {len(files)} uploaded files...")
         for file in files:
             if file.filename == '':
+                print("DEBUG: Skipping file with empty filename")
                 continue
 
-            # 1. Extract Text
+            # 1. Check File Size
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0) # Reset pointer
+            print(f"DEBUG: File '{file.filename}' size: {file_size} bytes")
+
+            if file_size > MAX_FILE_SIZE:
+                print(f"DEBUG: 400 Error - File '{file.filename}' exceeds limit")
+                return jsonify({
+                    "error": True, 
+                    "message": f"File '{file.filename}' exceeds the 10MB limit. Please upload smaller documents."
+                }), 400
+
+            # 2. Extract Text
             file_bytes = file.read()
             text = TextExtractionService.extract_text(file_bytes, file.filename)
             
             if text:
-                combined_text += f"\n--- CONTENT FROM {file.filename} ---\n{text}\n"
+                print(f"DEBUG: Extracted {len(text)} characters from '{file.filename}'")
+                files_content.append({
+                    "filename": file.filename,
+                    "text": text
+                })
+            else:
+                print(f"DEBUG: Failed to extract text from '{file.filename}'")
 
-        if not combined_text.strip():
+        if not files_content:
+            print("DEBUG: 400 Error - No text extracted from any file")
             return jsonify({"error": True, "message": "Could not extract text from the provided files."}), 400
 
-        # 2. Fetch Reference Metadata for AI context
+        # 3. Fetch Reference Metadata for AI context
         subjects = [s.subject_name for s in Subject.query.all()]
         grades = [g.grade_name for g in GradeLevel.query.all()]
         types = [t.type_name for t in ContentType.query.all()]
 
-        # 3. Analyze with AI (now aware of system metadata)
+        # 4. Analyze with AI
+        print(f"DEBUG: Starting AI analysis for {len(files_content)} files...")
         metadata = ai_service.analyze_document_metadata(
-            combined_text, 
+            files_content, 
             valid_subjects=subjects, 
             valid_grades=grades, 
             valid_types=types
         )
         
         if not metadata:
+            print("DEBUG: AI service returned None for metadata")
             return jsonify({"error": True, "message": "AI failed to analyze document"}), 500
             
+        print("DEBUG: AI analysis successful")
         return jsonify({
             "success": True,
             "data": metadata
         }), 200
         
     except Exception as e:
+        import traceback
         print(f"Analyze Document Route Error: {e}")
+        traceback.print_exc()
         return jsonify({"error": True, "message": str(e)}), 500
 
 @ai_bp.route('/generate', methods=['POST'])

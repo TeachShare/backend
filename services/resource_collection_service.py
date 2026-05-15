@@ -194,11 +194,17 @@ class ResourceCollectionService:
             func.count(ResourceLike.like_id).label('weekly_likes')
         ).filter(ResourceLike.created_at >= seven_days_ago).group_by(ResourceLike.collection_id).subquery()
 
+        rating_sub = db.session.query(
+            ResourceRating.collection_id,
+            func.avg(ResourceRating.score).label('avg_rating')
+        ).group_by(ResourceRating.collection_id).subquery()
+
         # Query
         query = db.session.query(
             ResourceCollection,
             func.coalesce(likes_sub.c.total_likes, 0).label('likes'),
-            func.coalesce(weekly_likes_sub.c.weekly_likes, 0).label('weekly_likes')
+            func.coalesce(weekly_likes_sub.c.weekly_likes, 0).label('weekly_likes'),
+            func.coalesce(rating_sub.c.avg_rating, 0).label('avg_rating')
         )\
         .options(joinedload(ResourceCollection.subject), 
                  joinedload(ResourceCollection.grade_level),
@@ -206,6 +212,7 @@ class ResourceCollectionService:
                  joinedload(ResourceCollection.collaborators))\
         .outerjoin(likes_sub, ResourceCollection.collection_id == likes_sub.c.collection_id)\
         .outerjoin(weekly_likes_sub, ResourceCollection.collection_id == weekly_likes_sub.c.collection_id)\
+        .outerjoin(rating_sub, ResourceCollection.collection_id == rating_sub.c.collection_id)\
         .filter(
             or_(
                 ResourceCollection.owner_id == teacher_id,
@@ -250,7 +257,7 @@ class ResourceCollectionService:
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         
         results = []
-        for col, total_likes, weekly_likes in pagination.items:
+        for col, total_likes, weekly_likes, avg_rating in pagination.items:
             # Safer tag fetching
             tag_names = [rt.tag.tag_name for rt in col.tags if rt.tag] if hasattr(col, 'tags') else []
             
@@ -267,6 +274,7 @@ class ResourceCollectionService:
                 "tags": tag_names, 
                 "likes": total_likes,
                 "weekly_likes": weekly_likes,
+                "avg_rating": round(float(avg_rating), 1) if avg_rating else 0,
                 "downloads": col.download_count,      
                 "visibility": col.visibility,
                 "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat(),
@@ -362,6 +370,9 @@ class ResourceCollectionService:
             .filter(ResourceRating.collection_id == collection_id).scalar()
         avg_rating = round(float(raw_avg), 1) if raw_avg is not None else 0.0
         
+        reviews_count = db.session.query(func.count(ResourceRating.rating_id))\
+            .filter(ResourceRating.collection_id == collection_id).scalar()
+        
         likes_count = ResourceLike.query.filter_by(collection_id=collection_id).count()
 
         download_count = collection.download_count
@@ -391,6 +402,7 @@ class ResourceCollectionService:
             "files": files_data,
             "comments": formatted_comments,
             "avg_rating": avg_rating,
+            "reviews_count": reviews_count,
             "likes": likes_count,
             "user_has_liked": user_has_liked,
             "downloads": download_count,
@@ -747,16 +759,23 @@ class ResourceCollectionService:
             func.count(ResourceLike.like_id).label('weekly_likes')
         ).filter(ResourceLike.created_at >= seven_days_ago).group_by(ResourceLike.collection_id).subquery()
 
+        rating_sub = db.session.query(
+            ResourceRating.collection_id,
+            func.avg(ResourceRating.score).label('avg_rating')
+        ).group_by(ResourceRating.collection_id).subquery()
+
         # Main query for the collections
         query = db.session.query(
             ResourceCollection,
-            func.coalesce(weekly_likes_sub.c.weekly_likes, 0).label('weekly_likes')
+            func.coalesce(weekly_likes_sub.c.weekly_likes, 0).label('weekly_likes'),
+            func.coalesce(rating_sub.c.avg_rating, 0).label('avg_rating')
         )\
         .join(Teacher, ResourceCollection.owner_id == Teacher.teacher_id)\
         .options(joinedload(ResourceCollection.subject),
                 joinedload(ResourceCollection.grade_level),
                 joinedload(ResourceCollection.content_type))\
-        .outerjoin(weekly_likes_sub, ResourceCollection.collection_id == weekly_likes_sub.c.collection_id)
+        .outerjoin(weekly_likes_sub, ResourceCollection.collection_id == weekly_likes_sub.c.collection_id)\
+        .outerjoin(rating_sub, ResourceCollection.collection_id == rating_sub.c.collection_id)
         
         if include_own:
             # For global search: Own resources (any visibility) OR others' public resources
@@ -808,7 +827,7 @@ class ResourceCollectionService:
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         results = []
         
-        for collection, weekly_likes in pagination.items:
+        for collection, weekly_likes, avg_rating in pagination.items:
             # Manual fetch for the latest version
             latest_v = ResourceVersion.query.filter_by(
                 collection_id=collection.collection_id, 
@@ -837,6 +856,7 @@ class ResourceCollectionService:
                 "file_count": file_count,
                 "downloads": collection.download_count,
                 "weekly_likes": weekly_likes,
+                "avg_rating": round(float(avg_rating), 1) if avg_rating else 0,
                 "estimate_duration": collection.estimate_duration,
                 "allow_remixing": collection.allow_remixing,
                 "version_no": latest_v.version_no if latest_v else 1,
@@ -848,16 +868,20 @@ class ResourceCollectionService:
                 "original_resource_title": latest_v.original_resource_title if latest_v else None
             })
 
+        total_avg_raw = db.session.query(func.avg(ResourceRating.score)).scalar()
+        total_avg_rating = round(float(total_avg_raw), 1) if total_avg_raw else 0
+
         return {
             "resources": results,
             "total_pages": pagination.pages,
             "current_page": pagination.page,
             "has_next": pagination.has_next,
-            "total_count": pagination.total
+            "total_count": pagination.total,
+            "total_avg_rating": total_avg_rating
         }
     
     @staticmethod
-    def remix_resource(original_collection_id, new_owner_id ):
+    def remix_resource(original_collection_id, new_owner_id):
         """
         Clones a resource into a new owner's collection.
         Sets is_remix=True and links to the parent_version_id for citation.
@@ -870,59 +894,63 @@ class ResourceCollectionService:
         if not original_collection.allow_remixing:
             raise ValueError("Remixing is disabled for this resource")
 
-        original_versions = ResourceVersion.query.filter_by(
-            collection_id=original_collection_id
-        ).order_by(ResourceVersion.version_no.asc()).all()
-
         try:
-            # Generate Unique Title for Remix
-            base_remix_title = f"{original_collection.title} (Remix)"
+            # Generate Unique Title for Remix (Truncate if needed to fit 255 chars)
+            title_base = original_collection.title
+            if len(title_base) > 240:
+                title_base = title_base[:240]
+            
+            base_remix_title = f"{title_base} (Remix)"
             unique_remix_title = ResourceCollectionService._generate_unique_title(base_remix_title)
 
             # 2. Spawn a BRAND NEW Collection for the new owner
             remixed_collection = ResourceCollection(
                 title=unique_remix_title,
                 description=original_collection.description,
-                owner_id=new_owner_id, # The teacher doing the remixing
+                owner_id=new_owner_id, 
                 subject_id=original_collection.subject_id,
                 grade_level_id=original_collection.grade_level_id,
                 content_type_id=original_collection.content_type_id,
                 estimate_duration=original_collection.estimate_duration,
                 student_summary=original_collection.student_summary,
-                allow_remixing=original_collection.allow_remixing,
-                visibility=original_collection.visibility,
-                is_published=False # Remixes start as drafts
+                allow_remixing=bool(original_collection.allow_remixing),
+                visibility=original_collection.visibility or 'public',
+                is_published=False 
             )
             db.session.add(remixed_collection)
             db.session.flush()
 
-            # 3. Clone ONLY THE LATEST Version as the NEW Version 1
+            # 3. Determine source content (latest version with fallbacks)
             latest_v = ResourceVersion.query.filter_by(
                 collection_id=original_collection_id, 
                 is_latest=True
             ).first()
 
+            # Fallback 1: Highest version number if no "latest" flag
             if not latest_v:
-                 raise ValueError("Source resource has no active version")
+                latest_v = ResourceVersion.query.filter_by(collection_id=original_collection_id)\
+                    .order_by(ResourceVersion.version_no.desc()).first()
 
             original_owner = original_collection.owner
             author_name = f"{original_owner.first_name} {original_owner.last_name}" if original_owner else "Unknown Author"
             author_username = original_owner.username if original_owner else None
 
+            # 4. Spawn New Version Record
+            # If we found a version, use it. Otherwise, use collection metadata.
             new_version = ResourceVersion(
                 collection_id=remixed_collection.collection_id,
-                version_no=1, # Reset to v1 for the new collection
-                title=latest_v.title,
-                description=latest_v.description,
+                version_no=1, 
+                title=latest_v.title if latest_v else original_collection.title,
+                description=latest_v.description if latest_v else original_collection.description,
                 notes=f"Remixed from {author_name}'s original",
                 is_latest=True,
-                is_remix=True, # Mark as a remix
-                is_published=False, # Remixes start as drafts
-                visibility=latest_v.visibility, # Inherit visibility settings
-                estimate_duration=latest_v.estimate_duration,
-                allow_remixing=latest_v.allow_remixing,
-                collaboration_mode=latest_v.collaboration_mode,
-                parent_version_id=latest_v.version_id, # Cite the original version
+                is_remix=True,
+                is_published=False,
+                visibility=(latest_v.visibility if latest_v else original_collection.visibility) or 'public',
+                estimate_duration=latest_v.estimate_duration if latest_v else original_collection.estimate_duration,
+                allow_remixing=bool(latest_v.allow_remixing if latest_v else original_collection.allow_remixing),
+                collaboration_mode=(latest_v.collaboration_mode if latest_v else original_collection.collaboration_mode) or 'none',
+                parent_version_id=latest_v.version_id if latest_v else None,
                 
                 # Snapshot Citation
                 original_author_name=author_name,
@@ -935,19 +963,20 @@ class ResourceCollectionService:
             db.session.add(new_version)
             db.session.flush()
 
-            # 4. Clone Files for this latest version
-            original_files = ResourceFile.query.filter_by(version_id=latest_v.version_id).all()
-            for f in original_files:
-                db.session.add(ResourceFile(
-                    version_id=new_version.version_id,
-                    file_url=f.file_url,
-                    file_name=f.file_name,
-                    file_type=f.file_type,
-                    file_size=f.file_size,
-                    file_hash=f.file_hash
-                ))
+            # 5. Clone Files for this version (if exists)
+            if latest_v:
+                original_files = ResourceFile.query.filter_by(version_id=latest_v.version_id).all()
+                for f in original_files:
+                    db.session.add(ResourceFile(
+                        version_id=new_version.version_id,
+                        file_url=f.file_url,
+                        file_name=f.file_name,
+                        file_type=f.file_type,
+                        file_size=f.file_size,
+                        file_hash=f.file_hash
+                    ))
 
-            # 5. Clone Tags (Attached to the Collection)
+            # 6. Clone Tags (Attached to the Collection)
             original_tags = ResourceTag.query.filter_by(collection_id=original_collection_id).all()
             for ot in original_tags:
                 db.session.add(ResourceTag(
@@ -958,23 +987,29 @@ class ResourceCollectionService:
             db.session.commit()
 
             # Trigger Notification for remix
-            from services.notification_service import NotificationService
-            NotificationService.create_notification(
-                recipient_id=original_collection.owner_id,
-                notification_type='remix',
-                sender_id=new_owner_id,
-                collection_id=original_collection_id,
-                extra_data={"remixed_collection_id": remixed_collection.collection_id}
-            )
+            try:
+                from services.notification_service import NotificationService
+                NotificationService.create_notification(
+                    recipient_id=original_collection.owner_id,
+                    notification_type='remix',
+                    sender_id=new_owner_id,
+                    collection_id=original_collection_id,
+                    extra_data={"remixed_collection_id": remixed_collection.collection_id}
+                )
+            except Exception as e:
+                print(f"Non-fatal error creating remix notification: {e}")
 
             # Log Activity
-            from services.activity_service import ActivityService
-            ActivityService.log_activity(
-                user_id=new_owner_id,
-                activity_type='remix_resource',
-                collection_id=original_collection_id,
-                extra_data={"remixed_collection_id": remixed_collection.collection_id}
-            )
+            try:
+                from services.activity_service import ActivityService
+                ActivityService.log_activity(
+                    user_id=new_owner_id,
+                    activity_type='remix_resource',
+                    collection_id=original_collection_id,
+                    extra_data={"remixed_collection_id": remixed_collection.collection_id}
+                )
+            except Exception as e:
+                print(f"Non-fatal error logging remix activity: {e}")
 
             return remixed_collection
 

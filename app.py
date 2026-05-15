@@ -111,6 +111,18 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or IS_PRODUCTION:
 
 jwt.init_app(app)
 mail.init_app(app)
+
+# REGISTER OAUTH CLIENTS
+oauth.register(
+    name='google',
+    client_id=app.config['GOOGLE_CLIENT_ID'],
+    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={
+        'scope': 'openid email profile'
+    }
+)
+
 oauth.init_app(app)
 migrate = Migrate(app, db)
 

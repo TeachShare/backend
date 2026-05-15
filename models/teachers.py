@@ -12,6 +12,7 @@ class Teacher(db.Model):
     is_verified = db.Column(db.Boolean, default=False, nullable=False)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     is_suspended = db.Column(db.Boolean, default=False, nullable=False)
+    is_archived = db.Column(db.Boolean, default=False, nullable=False)
 
     profile_image_url = db.Column(db.String(255), nullable=True)
     role = db.Column(db.String(100), nullable=True)

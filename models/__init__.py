@@ -26,3 +26,4 @@ from .ai_generated_content import AIGeneratedContent
 from .notification import Notification
 from .user_activity import UserActivity
 from .report import Report
+from .quiz import Quiz, QuizQuestion, QuizAttempt, QuizAnswer
