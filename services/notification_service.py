@@ -50,11 +50,8 @@ class NotificationService:
             
             # Emit real-time notification via Socket.IO
             room = f"user_{recipient_id}"
-            try:
-                from app import socketio
-                socketio.emit('new_notification', notif_data, room=room)
-            except ImportError:
-                print("Could not import socketio from app, real-time notification skipped")
+            from extensions import socketio
+            socketio.emit('new_notification', notif_data, room=room)
 
             return new_notif
         except Exception as e:
@@ -121,6 +118,9 @@ class NotificationService:
             'download': 'downloaded your resource',
             'remix': 'remixed your resource',
             'review': 'reviewed your resource',
-            'collaborator_added': 'added you as a collaborator on'
+            'collaborator_added': 'added you as a collaborator on',
+            'proposed_change': 'proposed changes to',
+            'version_approved': 'approved your changes on',
+            'version_rejected': 'declined your changes on'
         }
         return actions.get(notif_type, 'interacted with your resource')

@@ -1,5 +1,5 @@
-import eventlet
-eventlet.monkey_patch()
+from gevent import monkey
+monkey.patch_all()
 
 import os
 from dotenv import load_dotenv
@@ -7,11 +7,11 @@ load_dotenv()
 from datetime import timedelta
 from flask import Flask
 from controller.v1 import v1_bp
-from extensions import jwt, oauth
+from extensions import jwt, oauth, mail, socketio
 from models import db
 from flask_cors import CORS
 from flask_migrate import Migrate
-from flask_socketio import SocketIO, emit, join_room
+from flask_socketio import emit, join_room
 from services.message_service import MessageService
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -49,6 +49,14 @@ app.config["JWT_COOKIE_SAMESITE"] = "None" if IS_PRODUCTION else "Lax"
 app.config["JWT_COOKIE_CSRF_PROTECT"] = True
 app.config["JWT_ACCESS_CSRF_HEADER_NAME"] = "X-CSRF-TOKEN"
 
+# MAIL CONFIGURATION
+app.config['MAIL_SERVER'] = os.getenv("MAIL_SERVER")
+app.config['MAIL_PORT'] = int(os.getenv("MAIL_PORT", 587))
+app.config['MAIL_USE_TLS'] = os.getenv("MAIL_USE_TLS", "True") == "True"
+app.config['MAIL_USERNAME'] = os.getenv("MAIL_USERNAME")
+app.config['MAIL_PASSWORD'] = os.getenv("MAIL_PASSWORD")
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv("MAIL_DEFAULT_SENDER", "noreply@teachshare.com")
+
 # SESSION COOKIE SETTINGS (Used by Authlib for OAuth State)
 app.config["SESSION_COOKIE_NAME"] = "teachshare_session"
 app.config["SESSION_COOKIE_SECURE"] = IS_PRODUCTION
@@ -60,66 +68,62 @@ app.config["SESSION_COOKIE_DOMAIN"] = None  # Prevents domain-locking issues on 
 db.init_app(app)
 
 # AUTO-SEED DATA (Crucial for fresh production DBs)
-with app.app_context():
-    from models import Subject, GradeLevel, ContentType
-    try:
-        # 1. Seed Subjects
-        if Subject.query.count() == 0:
-            print("Auto-seeding Subjects...")
-            subjects = [
-                ("Mathematics", "General", 1), ("Science", "General", 2),
-                ("English Language Arts", "General", 3), ("Social Studies", "General", 4),
-                ("Art", "Elective", 5), ("Music", "Elective", 6),
-                ("Physical Education", "General", 7), ("Computer Science", "STEM", 8)
-            ]
-            for name, tier, rank in subjects:
-                db.session.add(Subject(subject_name=name, tier=tier, rank=rank))
-        
-        # 2. Seed Grade Levels
-        if GradeLevel.query.count() == 0:
-            print("Auto-seeding Grade Levels...")
-            grades = [
-                ("Preschool", "Early Childhood", 1), ("Kindergarten", "Early Childhood", 2),
-                ("Elementary", "Primary", 3), ("Secondary", "Junior High", 4),
-                ("Senior High School", "Secondary", 5), ("College / Higher Education", "Tertiary", 6)
-            ]
-            for name, tier, rank in grades:
-                db.session.add(GradeLevel(grade_name=name, tier=tier, rank=rank))
-        
-        # 3. Seed Content Types
-        if ContentType.query.count() == 0:
-            print("Auto-seeding Content Types...")
-            types = ["Lesson Plan", "Worksheet", "Assessment", "Activity", "Syllabus"]
-            for name in types:
-                db.session.add(ContentType(type_name=name))
-        
-        db.session.commit()
-        print("AUTO-SEED: Database tables populated successfully.")
-    except Exception as e:
-        print(f"AUTO-SEED ERROR: {e}")
-        db.session.rollback()
+# In development, we only run this in the main worker process to avoid noise from the reloader
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or IS_PRODUCTION:
+    with app.app_context():
+        from models import Subject, GradeLevel, ContentType
+        try:
+            # 1. Seed Subjects
+            if Subject.query.count() == 0:
+                print("AUTO-SEED: Populating Subjects...")
+                subjects = [
+                    ("Mathematics", "General", 1), ("Science", "General", 2),
+                    ("English Language Arts", "General", 3), ("Social Studies", "General", 4),
+                    ("Art", "Elective", 5), ("Music", "Elective", 6),
+                    ("Physical Education", "General", 7), ("Computer Science", "STEM", 8)
+                ]
+                for name, tier, rank in subjects:
+                    db.session.add(Subject(subject_name=name, tier=tier, rank=rank))
+            
+            # 2. Seed Grade Levels
+            if GradeLevel.query.count() == 0:
+                print("AUTO-SEED: Populating Grade Levels...")
+                grades = [
+                    ("Preschool", "Early Childhood", 1), ("Kindergarten", "Early Childhood", 2),
+                    ("Elementary", "Primary", 3), ("Secondary", "Junior High", 4),
+                    ("Senior High School", "Secondary", 5), ("College / Higher Education", "Tertiary", 6)
+                ]
+                for name, tier, rank in grades:
+                    db.session.add(GradeLevel(grade_name=name, tier=tier, rank=rank))
+            
+            # 3. Seed Content Types
+            if ContentType.query.count() == 0:
+                print("AUTO-SEED: Populating Content Types...")
+                types = ["Lesson Plan", "Worksheet", "Assessment", "Activity", "Syllabus"]
+                for name in types:
+                    db.session.add(ContentType(type_name=name))
+            
+            db.session.commit()
+            print("AUTO-SEED: Database tables ready.")
+        except Exception as e:
+            print(f"AUTO-SEED ERROR: {e}")
+            db.session.rollback()
 
 jwt.init_app(app)
+mail.init_app(app)
 oauth.init_app(app)
 migrate = Migrate(app, db)
-socketio = SocketIO(app, cors_allowed_origins=CORS_ORIGIN, async_mode='eventlet')
 
-# REGISTER GOOGLE
-google = oauth.register(
-    name='google',
-    client_id=app.config['GOOGLE_CLIENT_ID'],
-    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'openid email profile'}
-)
-
-# CORS
+# CORS configuration
 CORS_ORIGINS = [CORS_ORIGIN]
 if not IS_PRODUCTION:
     # Allow any local origin for development flexibility
     CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 CORS(app, supports_credentials=True, origins=CORS_ORIGINS)
+
+# Initialize SocketIO with correct CORS settings
+socketio.init_app(app, cors_allowed_origins=CORS_ORIGINS, async_mode='gevent')
 
 # SOCKET IO HANDLERS
 @socketio.on('join')

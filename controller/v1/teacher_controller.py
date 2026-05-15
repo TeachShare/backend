@@ -32,7 +32,8 @@ def get_all_teachers(current_teacher):
 @verification_required
 def get_dashboard_stats(current_teacher):
     try:
-        stats = TeacherService.get_dashboard_stats(current_teacher.teacher_id)
+        days = request.args.get('days', 30, type=int)
+        stats = TeacherService.get_dashboard_stats(current_teacher.teacher_id, days=days)
         return jsonify({"success": True, "data": stats}), 200
     except Exception as e:
         traceback.print_exc()

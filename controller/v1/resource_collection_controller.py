@@ -410,13 +410,11 @@ def restore_resource_version_route(current_teacher, collection_id, version_id):
         if not resource:
             return jsonify({"success": False, "error": "Resource not found"}), 404
         
-        if not ResourceCollectionService.has_edit_permission(collection_id, current_teacher_id):
-            return jsonify({
-                "success": False, 
-                "error": "Unauthorized: You do not have permission to restore versions for this resource."
-            }), 403
-        
-        result = ResourceCollectionService.restore_resource(collection_id, version_id)
+        result = ResourceCollectionService.restore_resource(
+            collection_id=collection_id, 
+            target_version_id=version_id,
+            teacher_id=current_teacher_id
+        )
 
         if "error" in result:
             return jsonify({"success": False, "error": result["error"]}), 400
@@ -430,6 +428,46 @@ def restore_resource_version_route(current_teacher, collection_id, version_id):
         print(f"Error restoring version {version_id} for collection {collection_id}: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
     
+
+@resource_collection_bp.route('/<int:collection_id>/approve/<int:version_id>', methods=['POST'])
+@verification_required
+def approve_version_route(current_teacher, collection_id, version_id):
+    try:
+        result = ResourceCollectionService.approve_version(
+            collection_id=collection_id,
+            version_id=version_id,
+            owner_id=current_teacher.teacher_id
+        )
+        return jsonify({
+            "success": True,
+            **result
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        print(f"Error approving version {version_id}: {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+@resource_collection_bp.route('/<int:collection_id>/reject/<int:version_id>', methods=['POST'])
+@verification_required
+def reject_version_route(current_teacher, collection_id, version_id):
+    try:
+        result = ResourceCollectionService.reject_version(
+            collection_id=collection_id,
+            version_id=version_id,
+            owner_id=current_teacher.teacher_id
+        )
+        return jsonify({
+            "success": True,
+            **result
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        print(f"Error rejecting version {version_id}: {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
 
 @resource_collection_bp.route('/<int:id>/review', methods=['POST'])
 @verification_required

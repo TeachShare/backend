@@ -2,14 +2,68 @@ from flask import Blueprint, request, jsonify
 from services.ai_service import AIService
 from services.pdf_service import PDFService
 from services.file_service import AppwriteService
+from services.text_extraction_service import TextExtractionService
 from lib.guards import verification_required
-from models import db, AIGeneratedContent
+from models import db, AIGeneratedContent, Subject, GradeLevel, ContentType
 import datetime
 
 ai_bp = Blueprint('ai_controller', __name__)
 ai_service = AIService()
 pdf_service = PDFService()
 appwrite_service = AppwriteService()
+
+@ai_bp.route('/analyze-document', methods=['POST'])
+@verification_required
+def analyze_document(current_teacher):
+    try:
+        files = request.files.getlist('files')
+        
+        # Backward compatibility for single 'file' key
+        if not files and 'file' in request.files:
+            files = [request.files['file']]
+
+        if not files:
+            return jsonify({"error": True, "message": "No files uploaded"}), 400
+        
+        combined_text = ""
+        for file in files:
+            if file.filename == '':
+                continue
+
+            # 1. Extract Text
+            file_bytes = file.read()
+            text = TextExtractionService.extract_text(file_bytes, file.filename)
+            
+            if text:
+                combined_text += f"\n--- CONTENT FROM {file.filename} ---\n{text}\n"
+
+        if not combined_text.strip():
+            return jsonify({"error": True, "message": "Could not extract text from the provided files."}), 400
+
+        # 2. Fetch Reference Metadata for AI context
+        subjects = [s.subject_name for s in Subject.query.all()]
+        grades = [g.grade_name for g in GradeLevel.query.all()]
+        types = [t.type_name for t in ContentType.query.all()]
+
+        # 3. Analyze with AI (now aware of system metadata)
+        metadata = ai_service.analyze_document_metadata(
+            combined_text, 
+            valid_subjects=subjects, 
+            valid_grades=grades, 
+            valid_types=types
+        )
+        
+        if not metadata:
+            return jsonify({"error": True, "message": "AI failed to analyze document"}), 500
+            
+        return jsonify({
+            "success": True,
+            "data": metadata
+        }), 200
+        
+    except Exception as e:
+        print(f"Analyze Document Route Error: {e}")
+        return jsonify({"error": True, "message": str(e)}), 500
 
 @ai_bp.route('/generate', methods=['POST'])
 @verification_required

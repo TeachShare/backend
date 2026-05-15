@@ -6,6 +6,34 @@ from sqlalchemy.sql import func
 
 class ResourceCollectionService:
     @staticmethod
+    def _generate_unique_title(base_title, exclude_id=None):
+        """
+        Ensures a resource title is globally unique.
+        Appends an incremental suffix like (1), (2) if the title is taken.
+        """
+        if not base_title:
+            return "Untitled Resource"
+            
+        new_title = base_title
+        counter = 1
+        
+        while True:
+            query = ResourceCollection.query.filter(
+                func.lower(ResourceCollection.title) == func.lower(new_title)
+            )
+            if exclude_id:
+                query = query.filter(ResourceCollection.collection_id != exclude_id)
+            
+            existing = query.first()
+            if not existing:
+                break
+            
+            new_title = f"{base_title} ({counter})"
+            counter += 1
+            
+        return new_title
+
+    @staticmethod
     def get_file_by_hash(file_hash):
         return FileSignature.query.filter_by(file_hash=file_hash).first()
 
@@ -14,8 +42,13 @@ class ResourceCollectionService:
         collection = ResourceCollection.query.get(collection_id)
         if not collection: return False
         if collection.owner_id == teacher_id: return True
-        
+
+        # NEW: EVERYONE COLLABORATION MODE
+        if collection.collaboration_mode == 'everyone':
+            return True
+
         collaborator = ResourceCollaborator.query.filter_by(
+
             collection_id=collection_id, 
             teacher_id=teacher_id, 
             role='editor'
@@ -29,6 +62,9 @@ class ResourceCollectionService:
 
         if is_published:
             required_fields.extend(['subject_id', 'grade_level_id', 'content_type_id'])
+            # Check for files if publishing
+            if not data.get('files'):
+                 raise ValueError("At least one file is required to publish a resource.")
 
         for field in required_fields:
             if not data.get(field):
@@ -39,9 +75,12 @@ class ResourceCollectionService:
             raise ValueError("Estimate duration must be less than 100 characters")
             
         try:
+            # Generate Unique Title
+            unique_title = ResourceCollectionService._generate_unique_title(data.get('title'))
+
             # 1. Create the parent Collection
             new_collection = ResourceCollection(
-                title = data.get('title'),
+                title = unique_title,
                 description = data.get('description'),
                 is_published = is_published,
                 owner_id = data.get('owner_id'),
@@ -64,9 +103,16 @@ class ResourceCollectionService:
             new_version = ResourceVersion(
                 collection_id = new_collection.collection_id,
                 version_no = 1,
+                title = new_collection.title,
+                description = new_collection.description,
                 notes = data.get('version_notes', "Initial upload"),
                 is_latest = True,  # CRITICAL: Makes it appear in 'My Resources' and 'Discovery'
                 is_remix = False,
+                is_published = is_published,
+                visibility = new_collection.visibility,
+                estimate_duration = new_collection.estimate_duration,
+                allow_remixing = new_collection.allow_remixing,
+                collaboration_mode = new_collection.collaboration_mode,
                 created_by = new_collection.owner_id
             )
             
@@ -208,6 +254,9 @@ class ResourceCollectionService:
             # Safer tag fetching
             tag_names = [rt.tag.tag_name for rt in col.tags if rt.tag] if hasattr(col, 'tags') else []
             
+            # Fetch latest version info for citation
+            latest_v = ResourceVersion.query.filter_by(collection_id=col.collection_id, is_latest=True).first()
+            
             results.append({
                 "collection_id": col.collection_id,
                 "title": col.title or "Untitled",
@@ -221,7 +270,12 @@ class ResourceCollectionService:
                 "downloads": col.download_count,      
                 "visibility": col.visibility,
                 "updated_at": col.updated_at.isoformat() if col.updated_at else datetime.now(timezone.utc).isoformat(),
-                "is_collaborator": any(c.teacher_id == teacher_id for c in col.collaborators) if hasattr(col, 'collaborators') else False
+                "is_collaborator": any(c.teacher_id == teacher_id for c in col.collaborators) if hasattr(col, 'collaborators') else False,
+                
+                # Citation
+                "is_remix": latest_v.is_remix if latest_v else False,
+                "original_author_name": latest_v.original_author_name if latest_v else None,
+                "original_resource_title": latest_v.original_resource_title if latest_v else None
             })
 
         return {
@@ -325,8 +379,8 @@ class ResourceCollectionService:
             "owner_id": collection.owner_id,
             "owner_name": f"{collection.owner.first_name} {collection.owner.last_name}" if collection.owner else "Unknown",
             "owner_username": collection.owner.username if collection.owner else None,
-            "title": collection.title,
-            "description": collection.description,
+            "title": target_version.title if target_version and target_version.title else collection.title,
+            "description": target_version.description if target_version and target_version.description else collection.description,
             "subject": collection.subject.subject_name if collection.subject else "General",
             "grade": collection.grade_level.grade_name if collection.grade_level else "All Grades",
             "type": collection.content_type.type_name if collection.content_type else "Resource",
@@ -341,23 +395,125 @@ class ResourceCollectionService:
             "user_has_liked": user_has_liked,
             "downloads": download_count,
             "remixes": remixes_count,
-            "estimate_duration": collection.estimate_duration,
+            "version_id": target_version.version_id if target_version else None,
+            "estimate_duration": target_version.estimate_duration if target_version and hasattr(target_version, 'estimate_duration') else collection.estimate_duration,
             "student_summary": collection.student_summary,
-            "is_published": collection.is_published,
+            "is_published": target_version.is_published if target_version else collection.is_published,
+            "is_approved": target_version.is_approved if target_version else True,
             "version_no": target_version.version_no if target_version else 1,
             "is_latest": target_version.is_latest if target_version else True,
             "version_notes": target_version.notes if target_version else None,
             "version_creator_name": f"{target_version.creator.first_name} {target_version.creator.last_name}" if target_version and target_version.creator else None,
             "updated_at": collection.updated_at.isoformat(),
+            # Citation (for remixes)
+            "is_remix": target_version.is_remix if target_version else False,
+            "original_author_name": target_version.original_author_name if target_version else None,
+            "original_author_username": target_version.original_author_username if target_version else None,
+            "original_resource_title": target_version.original_resource_title if target_version else None,
+            "parent_version_id": target_version.parent_version_id if target_version else None,
             # Settings
-            "allow_remixing": collection.allow_remixing,
-            "visibility": collection.visibility,
-            "collaboration_mode": collection.collaboration_mode,
+            "allow_remixing": target_version.allow_remixing if target_version and hasattr(target_version, 'allow_remixing') else collection.allow_remixing,
+            "visibility": target_version.visibility if target_version else collection.visibility,
+            "collaboration_mode": target_version.collaboration_mode if target_version and hasattr(target_version, 'collaboration_mode') else collection.collaboration_mode,
             "collaborators": collaborators
         }
     
     @staticmethod
-    def restore_resource(collection_id, target_version_id):
+    def approve_version(collection_id, version_id, owner_id):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection:
+            raise ValueError("Resource not found")
+        
+        if collection.owner_id != owner_id:
+            raise ValueError("Only the owner can approve versions")
+            
+        version = ResourceVersion.query.filter_by(
+            version_id=version_id, 
+            collection_id=collection_id
+        ).first()
+        
+        if not version:
+            raise ValueError("Version not found")
+            
+        if version.is_approved:
+            return {"message": "Version is already approved"}
+            
+        # 1. Promote to Latest
+        ResourceVersion.query.filter_by(collection_id=collection_id).update({"is_latest": False})
+        version.is_latest = True
+        version.is_approved = True
+        version.approved_by = owner_id
+        
+        # 2. Sync Collection Metadata with Approved Version
+        collection.title = version.title
+        collection.description = version.description
+        collection.is_published = version.is_published
+        collection.visibility = version.visibility
+        collection.estimate_duration = version.estimate_duration
+        collection.allow_remixing = version.allow_remixing
+        collection.collaboration_mode = version.collaboration_mode
+        collection.updated_at = datetime.now(timezone.utc)
+        
+        db.session.commit()
+        
+        # 3. Notify Collaborator
+        from services.notification_service import NotificationService
+        NotificationService.create_notification(
+            recipient_id=version.created_by,
+            notification_type='version_approved',
+            sender_id=owner_id,
+            collection_id=collection_id,
+            extra_data={"version_no": version.version_no}
+        )
+        
+        return {"success": True, "message": f"Version {version.version_no} approved and published."}
+    
+    @staticmethod
+    def reject_version(collection_id, version_id, owner_id):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection:
+            raise ValueError("Resource not found")
+            
+        if collection.owner_id != owner_id:
+            raise ValueError("Only the owner can reject proposed versions")
+            
+        version = ResourceVersion.query.filter_by(
+            version_id=version_id, 
+            collection_id=collection_id
+        ).first()
+        
+        if not version:
+            raise ValueError("Version not found")
+            
+        if version.is_approved:
+            raise ValueError("Cannot reject an approved version. Use 'restore' to roll back instead.")
+            
+        # Notify Collaborator
+        from services.notification_service import NotificationService
+        NotificationService.create_notification(
+            recipient_id=version.created_by,
+            notification_type='version_rejected',
+            sender_id=owner_id,
+            collection_id=collection_id,
+            extra_data={"version_no": version.version_no}
+        )
+        
+        # Delete the version (it was just a proposal)
+        db.session.delete(version)
+        db.session.commit()
+        
+        return {"success": True, "message": f"Version {version.version_no} rejected and deleted."}
+    
+    @staticmethod
+    def restore_resource(collection_id, target_version_id, teacher_id):
+        collection = ResourceCollection.query.get(collection_id)
+        if not collection:
+            raise ValueError("Resource not found")
+        
+        # OWNER-ONLY RESTORE ENFORCEMENT
+        if collection.owner_id != teacher_id:
+            raise ValueError("Unauthorized: Only the resource owner can restore previous versions.")
+
         target_version = ResourceVersion.query.filter_by(
             version_id=target_version_id, 
             collection_id=collection_id
@@ -371,6 +527,12 @@ class ResourceCollectionService:
         ResourceVersion.query.filter_by(collection_id=collection_id).update({"is_latest": False})
         target_version.is_latest = True
 
+        # Sync collection state with restored version
+        collection.is_published = target_version.is_published
+        collection.visibility = target_version.visibility
+        collection.estimate_duration = target_version.estimate_duration
+        collection.allow_remixing = target_version.allow_remixing
+        collection.collaboration_mode = target_version.collaboration_mode
         collection.updated_at = datetime.now(timezone.utc)
 
         db.session.commit()
@@ -387,59 +549,80 @@ class ResourceCollectionService:
         if updater_id and not ResourceCollectionService.has_edit_permission(old_collection_id, updater_id):
             raise ValueError("Unauthorized to update this resource")
         
+        is_owner = updater_id == collection.owner_id
         is_published = data.get('is_published', collection.is_published)
 
-        # Validation for publishing
-        if is_published:
+        # Fetch last version once for entire function
+        last_v = ResourceVersion.query.filter_by(collection_id=old_collection_id)\
+            .order_by(ResourceVersion.version_no.desc()).first()
+
+        # Validation for publishing (only if owner is updating or it's already published)
+        if is_owner and is_published:
             required_fields = ['title', 'subject_id', 'grade_level_id', 'content_type_id']
             for field in required_fields:
                 val = data.get(field)
-                if val is None: # Use the existing value if not provided in payload
+                if val is None: 
                     val = getattr(collection, field)
-                
                 if not val:
                     raise ValueError(f"Missing required field for publishing: '{field}'")
+            
+            # Check for files
+            last_files_count = ResourceFile.query.filter_by(version_id=last_v.version_id).count() if last_v else 0
+            removed_files_count = len(data.get('removed_file_urls', []))
+            new_files_count = len(new_files_info or [])
+            
+            if (last_files_count - removed_files_count + new_files_count) <= 0:
+                raise ValueError("At least one file is required to publish a resource.")
 
         estimate_duration = data.get('estimate_duration')
         if estimate_duration and len(str(estimate_duration)) > 100:
             raise ValueError("Estimate duration must be less than 100 characters")
 
-        collection.is_published = data.get('is_published', collection.is_published)
-        collection.title = data.get('title', collection.title)
-        collection.description = data.get('description', collection.description)
-        collection.subject_id = data.get('subject_id', collection.subject_id)
-        collection.grade_level_id = data.get('grade_level_id', collection.grade_level_id)
-        collection.estimate_duration = estimate_duration if estimate_duration is not None else collection.estimate_duration
-        collection.student_summary = data.get('student_summary', collection.student_summary)
-        
-        # Update settings
-        collection.allow_remixing = data.get('allow_remixing', collection.allow_remixing)
-        
-        # OWNER-ONLY SETTINGS
-        if updater_id and collection.owner_id == updater_id:
+        # IF OWNER: Update collection metadata immediately
+        if is_owner:
+            new_title = data.get('title')
+            if new_title:
+                unique_title = ResourceCollectionService._generate_unique_title(new_title, exclude_id=old_collection_id)
+                collection.title = unique_title
+            
+            collection.is_published = data.get('is_published', collection.is_published)
+            collection.description = data.get('description', collection.description)
+            collection.subject_id = data.get('subject_id', collection.subject_id)
+            collection.grade_level_id = data.get('grade_level_id', collection.grade_level_id)
+            collection.estimate_duration = estimate_duration if estimate_duration is not None else collection.estimate_duration
+            collection.student_summary = data.get('student_summary', collection.student_summary)
+            collection.allow_remixing = data.get('allow_remixing', collection.allow_remixing)
             collection.visibility = data.get('visibility', collection.visibility)
             collection.collaboration_mode = data.get('collaboration_mode', collection.collaboration_mode)
-        elif not updater_id:
-            # Internal server calls with no updater_id (e.g. initial creation logic if reused)
-            collection.visibility = data.get('visibility', collection.visibility)
-            collection.collaboration_mode = data.get('collaboration_mode', collection.collaboration_mode)
+            collection.updated_at = datetime.now(timezone.utc)
+            
+            # Mark previous versions as not latest
+            ResourceVersion.query.filter_by(collection_id=old_collection_id).update({"is_latest": False})
 
-        collection.updated_at = datetime.now(timezone.utc)
-        
-        last_v = ResourceVersion.query.filter_by(collection_id=old_collection_id)\
-            .order_by(ResourceVersion.version_no.desc()).first()
-        
         new_v_no = (last_v.version_no + 1) if last_v else 1
 
-        ResourceVersion.query.filter_by(collection_id=old_collection_id).update({"is_latest": False})
-
+        # CREATE NEW VERSION (Proposed if collaborator, Live if owner)
         new_version = ResourceVersion(
             collection_id = old_collection_id,
             version_no = new_v_no,
-            notes = data.get('version_notes') or data.get('notes') or 'updated resources',
-            is_latest = True,
-            is_remix = False,
-            parent_version_id = last_v.version_id if last_v else None,
+            title = data.get('title') or collection.title,
+            description = data.get('description') or collection.description,
+            notes = data.get('version_notes') or data.get('notes') or ('proposed update' if not is_owner else 'updated resource'),
+            is_latest = is_owner, # Only owner updates are immediately "Latest"
+            is_approved = is_owner, # Owner edits are auto-approved
+            is_remix = last_v.is_remix if last_v else False,
+            is_published = is_published if is_owner else collection.is_published,
+            visibility = data.get('visibility') if is_owner else collection.visibility,
+            estimate_duration = estimate_duration if is_owner else collection.estimate_duration,
+            allow_remixing = data.get('allow_remixing') if is_owner else collection.allow_remixing,
+            collaboration_mode = data.get('collaboration_mode') if is_owner else collection.collaboration_mode,
+            
+            # Propagate Citation
+            original_author_name = last_v.original_author_name if last_v else None,
+            original_author_username = last_v.original_author_username if last_v else None,
+            original_resource_title = last_v.original_resource_title if last_v else None,
+            parent_version_id = last_v.parent_version_id if last_v else None,
+            
             created_by = updater_id if updater_id else collection.owner_id
         )
         
@@ -474,10 +657,12 @@ class ResourceCollectionService:
                     file_size=f.get('size'),
                     file_hash=f.get('hash')
                 ))
-                
-        ResourceTag.query.filter_by(collection_id=old_collection_id).delete()
-
-        for tag_string in data.get('tags', []):
+        
+        # Tags are collection-level metadata; only owners can update them via update_resource for now
+        # to prevent collaborator-driven tag spam.
+        if is_owner:
+            ResourceTag.query.filter_by(collection_id=old_collection_id).delete()
+            for tag_string in data.get('tags', []):
                 clean_name = str(tag_string).strip().lower()
                 if not clean_name: continue
                 
@@ -491,13 +676,31 @@ class ResourceCollectionService:
 
         db.session.commit()
 
-        # Log Activity
+        # Notifications & Logging
         from services.activity_service import ActivityService
-        ActivityService.log_activity(
-            user_id=collection.owner_id,
-            activity_type='update_resource',
-            collection_id=collection.collection_id
-        )
+        from services.notification_service import NotificationService
+        
+        if is_owner:
+            ActivityService.log_activity(
+                user_id=collection.owner_id,
+                activity_type='update_resource',
+                collection_id=collection.collection_id
+            )
+        else:
+            # COLLABORATOR: Notify owner of proposed changes
+            NotificationService.create_notification(
+                recipient_id=collection.owner_id,
+                notification_type='proposed_change',
+                sender_id=updater_id,
+                collection_id=collection.collection_id,
+                extra_data={"version_no": new_version.version_no}
+            )
+            
+            ActivityService.log_activity(
+                user_id=updater_id,
+                activity_type='propose_update',
+                collection_id=collection.collection_id
+            )
 
         return collection
 
@@ -514,10 +717,18 @@ class ResourceCollectionService:
             file_count = ResourceFile.query.filter_by(version_id=version.version_id).count()
             history.append({
                 "collection_id": version.collection_id,
+                "owner_id": collection.owner_id,
                 "version_id": version.version_id,
                 "version_no": version.version_no,
                 "notes": version.notes,
                 "is_latest": version.is_latest, 
+                "is_published": version.is_published,
+                "visibility": version.visibility,
+                "estimate_duration": version.estimate_duration,
+                "allow_remixing": version.allow_remixing,
+                "collaboration_mode": version.collaboration_mode,
+                "is_approved": version.is_approved,
+                "approved_by": f"{version.approved_by_teacher.first_name} {version.approved_by_teacher.last_name}" if hasattr(version, 'approved_by_teacher') and version.approved_by_teacher else None,
                 "created_at": version.created_at.isoformat(),
                 "file_count": file_count,
                 "author": f"{version.creator.first_name} {version.creator.last_name}" if version.creator else "Unknown"
@@ -629,7 +840,12 @@ class ResourceCollectionService:
                 "estimate_duration": collection.estimate_duration,
                 "allow_remixing": collection.allow_remixing,
                 "version_no": latest_v.version_no if latest_v else 1,
-                "updated_at": collection.updated_at.isoformat()
+                "updated_at": collection.updated_at.isoformat(),
+                
+                # Citation
+                "is_remix": latest_v.is_remix if latest_v else False,
+                "original_author_name": latest_v.original_author_name if latest_v else None,
+                "original_resource_title": latest_v.original_resource_title if latest_v else None
             })
 
         return {
@@ -659,9 +875,13 @@ class ResourceCollectionService:
         ).order_by(ResourceVersion.version_no.asc()).all()
 
         try:
+            # Generate Unique Title for Remix
+            base_remix_title = f"{original_collection.title} (Remix)"
+            unique_remix_title = ResourceCollectionService._generate_unique_title(base_remix_title)
+
             # 2. Spawn a BRAND NEW Collection for the new owner
             remixed_collection = ResourceCollection(
-                title=f"{original_collection.title} (Remix)",
+                title=unique_remix_title,
                 description=original_collection.description,
                 owner_id=new_owner_id, # The teacher doing the remixing
                 subject_id=original_collection.subject_id,
@@ -676,32 +896,56 @@ class ResourceCollectionService:
             db.session.add(remixed_collection)
             db.session.flush()
 
-            # 3. Clone ALL Versions
-            for ov in original_versions:
-                new_version = ResourceVersion(
-                    collection_id=remixed_collection.collection_id,
-                    version_no=ov.version_no,
-                    notes=ov.notes,
-                    is_latest=ov.is_latest,
-                    is_remix=True, # Mark as a remix
-                    parent_version_id=ov.version_id, # Cite the original version
-                    created_by=new_owner_id,
-                    created_at=ov.created_at # Preserve timing
-                )
-                db.session.add(new_version)
-                db.session.flush()
+            # 3. Clone ONLY THE LATEST Version as the NEW Version 1
+            latest_v = ResourceVersion.query.filter_by(
+                collection_id=original_collection_id, 
+                is_latest=True
+            ).first()
 
-                # 4. Clone Files for each version
-                original_files = ResourceFile.query.filter_by(version_id=ov.version_id).all()
-                for f in original_files:
-                    db.session.add(ResourceFile(
-                        version_id=new_version.version_id,
-                        file_url=f.file_url,
-                        file_name=f.file_name,
-                        file_type=f.file_type,
-                        file_size=f.file_size,
-                        file_hash=f.file_hash
-                    ))
+            if not latest_v:
+                 raise ValueError("Source resource has no active version")
+
+            original_owner = original_collection.owner
+            author_name = f"{original_owner.first_name} {original_owner.last_name}" if original_owner else "Unknown Author"
+            author_username = original_owner.username if original_owner else None
+
+            new_version = ResourceVersion(
+                collection_id=remixed_collection.collection_id,
+                version_no=1, # Reset to v1 for the new collection
+                title=latest_v.title,
+                description=latest_v.description,
+                notes=f"Remixed from {author_name}'s original",
+                is_latest=True,
+                is_remix=True, # Mark as a remix
+                is_published=False, # Remixes start as drafts
+                visibility=latest_v.visibility, # Inherit visibility settings
+                estimate_duration=latest_v.estimate_duration,
+                allow_remixing=latest_v.allow_remixing,
+                collaboration_mode=latest_v.collaboration_mode,
+                parent_version_id=latest_v.version_id, # Cite the original version
+                
+                # Snapshot Citation
+                original_author_name=author_name,
+                original_author_username=author_username,
+                original_resource_title=original_collection.title,
+                
+                created_by=new_owner_id,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.session.add(new_version)
+            db.session.flush()
+
+            # 4. Clone Files for this latest version
+            original_files = ResourceFile.query.filter_by(version_id=latest_v.version_id).all()
+            for f in original_files:
+                db.session.add(ResourceFile(
+                    version_id=new_version.version_id,
+                    file_url=f.file_url,
+                    file_name=f.file_name,
+                    file_type=f.file_type,
+                    file_size=f.file_size,
+                    file_hash=f.file_hash
+                ))
 
             # 5. Clone Tags (Attached to the Collection)
             original_tags = ResourceTag.query.filter_by(collection_id=original_collection_id).all()
@@ -801,11 +1045,12 @@ class ResourceCollectionService:
         if not collection:
             raise ValueError("Resource not found")
         
+        # OWNER-ONLY INVITE ENFORCEMENT
+        if not owner_id or collection.owner_id != owner_id:
+            raise ValueError("Unauthorized: Only the resource owner can invite collaborators.")
+            
         if collection.collaboration_mode == 'none':
             raise ValueError("Collaboration is disabled for this resource")
-        
-        if owner_id and collection.owner_id != owner_id:
-            raise ValueError("Only the owner can add collaborators")
         
         if collection.owner_id == teacher_id:
             raise ValueError("Owner cannot be a collaborator")

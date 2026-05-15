@@ -80,3 +80,57 @@ class AIService:
         except Exception as e:
             print(f"Groq API Error: {str(e)}")
             raise e
+
+    def analyze_document_metadata(self, document_text, valid_subjects=None, valid_grades=None, valid_types=None):
+        """
+        Analyzes document text and returns structured metadata as JSON.
+        Injects system metadata options for high-precision mapping.
+        """
+        if not self.api_key:
+            return {
+                "title": "Document Analysis Result",
+                "description": "Please set GROQ_API_KEY to enable AI document analysis.",
+                "tags": ["analysis", "ai"],
+                "subject": "General",
+                "grade": "All Grades",
+                "duration": "45 Minutes",
+                "type": "Lesson Plan"
+            }
+
+        # Format reference lists for the prompt
+        subjects_str = ", ".join(valid_subjects) if valid_subjects else "General"
+        grades_str = ", ".join(valid_grades) if valid_grades else "All Grades"
+        types_str = ", ".join(valid_types) if valid_types else "Lesson Plan"
+
+        prompt = (
+            "You are an expert instructional designer. Analyze the following text from an educational document "
+            "and generate a structured summary in JSON format.\n\n"
+            "REQUIREMENTS:\n"
+            "1. 'title': A compelling, professional title (max 60 chars).\n"
+            "2. 'description': A professional 2-3 sentence summary of the content (max 250 chars).\n"
+            "3. 'tags': An array of 5-7 relevant educational keywords.\n"
+            f"4. 'subject': Choose the MOST ACCURATE or CLOSEST match from this list: [{subjects_str}].\n"
+            f"5. 'grade': Choose the MOST ACCURATE or CLOSEST match from this list: [{grades_str}].\n"
+            "6. 'duration': An estimated time to complete the lesson or use the resource (e.g., '45 Minutes', '2 Hours').\n"
+            f"7. 'type': Choose the MOST ACCURATE or CLOSEST match from this list: [{types_str}].\n\n"
+            "OUTPUT FORMAT: Return ONLY a valid JSON object. No markdown, no preambles.\n\n"
+            f"DOCUMENT TEXT:\n{document_text[:4000]}" # Limit text to stay within context window
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are a professional educational data parser. Output ONLY JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                model=self.model,
+                temperature=0.3, # Lower temperature for more consistent JSON
+                response_format={"type": "json_object"}
+            )
+            
+            import json
+            return json.loads(response.choices[0].message.content)
+            
+        except Exception as e:
+            print(f"Document Analysis Error: {e}")
+            return None

@@ -63,21 +63,25 @@ class TeacherService:
         return ResourceCollectionService.get_my_resources(teacher_id, filters)
 
     @staticmethod
-    def get_dashboard_stats(teacher_id):
+    def get_dashboard_stats(teacher_id, days=30):
         try:
             from models import ResourceCollection, Follower, ResourceLike
             from datetime import datetime, timezone, timedelta
-            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+            start_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+            teacher = Teacher.query.get(teacher_id)
+            if not teacher:
+                raise Exception("Teacher not found")
 
             # Resources counts
             total_resources = ResourceCollection.query.filter_by(owner_id=teacher_id, is_hidden=False).count()
             published_count = ResourceCollection.query.filter_by(owner_id=teacher_id, is_published=True, is_hidden=False).count()
             draft_count = total_resources - published_count
             
-            # Weekly resource growth
-            weekly_resources = ResourceCollection.query.filter(
+            # Growth in period
+            period_resources = ResourceCollection.query.filter(
                 ResourceCollection.owner_id == teacher_id,
-                ResourceCollection.created_at >= seven_days_ago
+                ResourceCollection.created_at >= start_date
             ).count()
 
             # Likes counts
@@ -85,24 +89,42 @@ class TeacherService:
                 .join(ResourceCollection, ResourceLike.collection_id == ResourceCollection.collection_id)\
                 .filter(ResourceCollection.owner_id == teacher_id).scalar() or 0
             
-            weekly_likes = db.session.query(func.count(ResourceLike.like_id))\
+            period_likes = db.session.query(func.count(ResourceLike.like_id))\
                 .join(ResourceCollection, ResourceLike.collection_id == ResourceCollection.collection_id)\
                 .filter(ResourceCollection.owner_id == teacher_id)\
-                .filter(ResourceLike.created_at >= seven_days_ago).scalar() or 0
+                .filter(ResourceLike.created_at >= start_date).scalar() or 0
 
             # Followers
             followers_count = Follower.query.filter_by(followed_id=teacher_id).count()
             following_count = Follower.query.filter_by(follower_id=teacher_id).count()
+
+            # Roadmap Stats (Certification)
+            profile_completion = 0
+            if teacher.bio: profile_completion += 25
+            if teacher.institution: profile_completion += 25
+            if teacher.role: profile_completion += 25
+            if teacher.profile_image_url: profile_completion += 25
+            
+            roadmap = {
+                "profile_complete": profile_completion == 100,
+                "profile_completion_percentage": profile_completion,
+                "resources_published": published_count,
+                "resources_goal": 5,
+                "likes_received": total_likes,
+                "likes_goal": 10,
+                "is_verified": teacher.is_verified
+            }
             
             return {
                 "total_resources": total_resources,
                 "published_count": published_count,
                 "draft_count": draft_count,
-                "weekly_resources": weekly_resources,
+                "period_resources": period_resources,
                 "total_likes": total_likes,
-                "weekly_likes": weekly_likes,
+                "period_likes": period_likes,
                 "followers_count": followers_count,
-                "following_count": following_count
+                "following_count": following_count,
+                "roadmap": roadmap
             }
         except Exception as e:
             import traceback

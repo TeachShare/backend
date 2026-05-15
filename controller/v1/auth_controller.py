@@ -128,7 +128,12 @@ def google_callback():
         error_msg = result.get('message', 'Authentication failed')
         return redirect(f"{FRONTEND_URL}/auth?error={error_msg}")
 
-    res = redirect(f"{FRONTEND_URL}/dashboard")
+    # Redirect to dashboard, but include onboarding flag if needed
+    target_url = f"{FRONTEND_URL}/dashboard"
+    if result.get('needs_onboarding'):
+        target_url = f"{FRONTEND_URL}/dashboard?onboarding=true"
+
+    res = redirect(target_url)
     set_access_cookies(res, jwt_token)
     set_auth_cookie(res, 'is_verified', 'true')
     set_auth_cookie(res, 'teacher_id', str(result.get('user', {}).get('id')))
@@ -180,4 +185,28 @@ def change_password():
     new_password = data.get('new_password')
     
     result = AuthService.change_password(teacher_id, current_password, new_password)
+    return jsonify(result), (200 if result.get("success") else 400)
+
+@auth_bp.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    data = request.get_json()
+    email = data.get('email')
+    
+    if not email:
+        return jsonify({"success": False, "message": "Email is required"}), 400
+        
+    result = AuthService.forgot_password(email)
+    return jsonify(result), (200 if result.get("success") else 400)
+
+@auth_bp.route('/reset-password', methods=['POST'])
+def reset_password():
+    data = request.get_json()
+    email = data.get('email')
+    code = data.get('code')
+    new_password = data.get('new_password')
+    
+    if not all([email, code, new_password]):
+        return jsonify({"success": False, "message": "Missing required fields"}), 400
+        
+    result = AuthService.reset_password_with_otp(email, code, new_password)
     return jsonify(result), (200 if result.get("success") else 400)
