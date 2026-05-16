@@ -34,6 +34,7 @@ class TeacherService:
             "last_name": teacher.last_name,
             "email": teacher.email,
             "profile_image_url": teacher.profile_image_url,
+            "cover_image_url": teacher.cover_image_url,
             "auth_provider": teacher.auth.auth_provider if teacher.auth else "local",
             "role": teacher.role,
             "institution": teacher.institution,

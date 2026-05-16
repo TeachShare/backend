@@ -82,6 +82,7 @@ def update_profile(current_teacher):
         current_teacher.institution = data.get('institution', current_teacher.institution)
         current_teacher.bio = data.get('bio', current_teacher.bio)
         current_teacher.profile_image_url = data.get('profile_image_url', current_teacher.profile_image_url)
+        current_teacher.cover_image_url = data.get('cover_image_url', current_teacher.cover_image_url)
         
         # New Settings
         current_teacher.theme_preference = data.get('theme_preference', current_teacher.theme_preference)
@@ -100,6 +101,7 @@ def update_profile(current_teacher):
                 "institution": current_teacher.institution,
                 "bio": current_teacher.bio,
                 "profile_image_url": current_teacher.profile_image_url,
+                "cover_image_url": current_teacher.cover_image_url,
                 "settings": {
                     "theme_preference": current_teacher.theme_preference,
                     "email_notifications": current_teacher.email_notifications,
@@ -135,6 +137,35 @@ def upload_profile_photo(current_teacher):
         return jsonify({
             "success": True,
             "message": "Photo uploaded successfully",
+            "url": upload_result['url']
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@teacher_bp.route('/update/cover', methods=['POST'])
+@verification_required
+def upload_cover_photo(current_teacher):
+    try:
+        if 'file' not in request.files:
+            return jsonify({"success": False, "message": "No file part"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"success": False, "message": "No selected file"}), 400
+
+        from services.file_service import AppwriteService
+        appwrite = AppwriteService()
+        
+        upload_result = appwrite.upload_file(file)
+        
+        current_teacher.cover_image_url = upload_result['url']
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Cover photo updated successfully",
             "url": upload_result['url']
         }), 200
     except Exception as e:

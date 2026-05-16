@@ -15,6 +15,7 @@ class Teacher(db.Model):
     is_archived = db.Column(db.Boolean, default=False, nullable=False)
 
     profile_image_url = db.Column(db.String(255), nullable=True)
+    cover_image_url = db.Column(db.String(255), nullable=True)
     role = db.Column(db.String(100), nullable=True)
     institution = db.Column(db.String(150), nullable=True)
     bio = db.Column(db.Text, nullable=True)
